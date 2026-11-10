@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"regexp/syntax"
+	"slices"
 	"strings"
 	"text/template"
 
@@ -168,6 +169,12 @@ type SlackSection struct {
 	// instead of creating one. Channel mode only; ignored (with a warning) in
 	// thread mode.
 	AllowExistingChannel bool `toml:"allow_existing_channel"`
+	// MentionBots lists the Slack bot ids (B...) of the apps — a Slack
+	// workflow, an integration bot — whose @mention in a case channel is
+	// answered. An app's post names no Slack user, so such a turn acts as the
+	// case channel itself and may change that case; an app not listed here is
+	// ignored. Channel mode only; ignored (with a warning) in thread mode.
+	MentionBots []string `toml:"mention_bots"`
 }
 
 // WorkspaceAgentSection represents the [slack.workspace_agent] subsection: the
@@ -227,6 +234,12 @@ type CaseSection struct {
 	Closed  []string                `toml:"closed"`
 	Status  []ActionStatusConfigRow `toml:"status"`
 	Prompts CasePromptsSection      `toml:"prompts"`
+	// Actions enables Actions on the Cases of a thread-mode workspace: the Web
+	// UI's Related Actions section, action creation and reparenting, and the
+	// action tools of the mention agent. Default false, so a thread-mode
+	// workspace configured before the option existed keeps having no Actions.
+	// Channel-mode workspaces always have Actions and ignore it.
+	Actions bool `toml:"actions"`
 }
 
 // hasStatusConfig reports whether the section configures a case status set
@@ -402,6 +415,10 @@ type WorkspaceConfig struct {
 	SlackMonitorChannel string
 	AcceptBot           bool
 	CaseStatusSet       *model.ActionStatusSet
+	// CaseActions is [case] actions: whether a thread-mode workspace's Cases
+	// have Actions. Always false for a channel-mode workspace, which has
+	// Actions regardless (see model.WorkspaceEntry.ActionsEnabled).
+	CaseActions bool
 	// ReactionEmoji is the normalized (colon-stripped) reaction trigger emoji,
 	// empty when disabled.
 	ReactionEmoji string
@@ -414,6 +431,9 @@ type WorkspaceConfig struct {
 	// AllowExistingSlackChannel is [slack] allow_existing_channel; always
 	// false for a thread-mode workspace.
 	AllowExistingSlackChannel bool
+	// MentionBotIDs is [slack] mention_bots; always empty for a thread-mode
+	// workspace.
+	MentionBotIDs []string
 }
 
 // Labels represents entity display labels
@@ -653,6 +673,10 @@ func (a *AppConfig) Validate() error {
 		return err
 	}
 
+	if err := a.validateMentionBots(); err != nil {
+		return err
+	}
+
 	// [case.prompts] inline / _file exclusivity, checked without reading files.
 	if a.Case != nil {
 		if _, _, err := a.Case.Prompts.resolve(""); err != nil {
@@ -661,6 +685,34 @@ func (a *AppConfig) Validate() error {
 	}
 
 	return nil
+}
+
+// slackBotIDPattern is a lenient check for a Slack bot id, which starts with B
+// and is uppercase alphanumerics. It catches the likely mistakes — an app id
+// (A...), a bot user id (U...), an app's display name — each of which would
+// silently match nothing.
+var slackBotIDPattern = regexp.MustCompile(`^B[A-Z0-9]+$`)
+
+// validateMentionBots validates [slack] mention_bots.
+func (a *AppConfig) validateMentionBots() error {
+	for _, id := range a.Slack.MentionBots {
+		if !slackBotIDPattern.MatchString(id) {
+			return goerr.Wrap(ErrInvalidMentionBot,
+				"[slack] mention_bots must hold Slack bot ids (e.g. B0123456789)",
+				goerr.V("mention_bot", id))
+		}
+	}
+	return nil
+}
+
+// mentionBotIDs returns the bot ids a workspace answers mentions from. A
+// thread-mode workspace answers none: a thread-mode case does not own its
+// channel, so the case-channel actor such a turn needs cannot scope it.
+func mentionBotIDs(ids []string, mode model.CaseMode) []string {
+	if mode.IsThread() || len(ids) == 0 {
+		return nil
+	}
+	return slices.Clone(ids)
 }
 
 // validateWorkspaceChannel validates [slack] workspace_channel and the
@@ -1115,9 +1167,17 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 			logging.Default().Warn("thread-mode workspace ignores [slack] allow_existing_channel",
 				"workspace_id", wsID, "config_path", path)
 		}
+		if len(appCfg.Slack.MentionBots) > 0 {
+			logging.Default().Warn("thread-mode workspace ignores [slack] mention_bots",
+				"workspace_id", wsID, "config_path", path)
+		}
 	} else {
 		if appCfg.Case != nil && appCfg.Case.hasStatusConfig() {
 			logging.Default().Warn("channel-mode workspace ignores [case.status]",
+				"workspace_id", wsID, "config_path", path)
+		}
+		if appCfg.Case != nil && appCfg.Case.Actions {
+			logging.Default().Warn("channel-mode workspace ignores [case] actions (channel-mode cases always have actions)",
 				"workspace_id", wsID, "config_path", path)
 		}
 		if caseCreatePrompt != "" {
@@ -1162,11 +1222,13 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		SlackMonitorChannel:  appCfg.Slack.Channel,
 		AcceptBot:            appCfg.Slack.AcceptBot,
 		CaseStatusSet:        caseStatusSet,
+		CaseActions:          caseMode.IsThread() && appCfg.Case != nil && appCfg.Case.Actions,
 		ReactionEmoji:        normalizeReactionEmoji(appCfg.Slack.Reaction),
 		WorkspaceChannelID:   appCfg.Slack.WorkspaceChannel,
 		WorkspaceAgentPrompt: workspaceAgentPrompt,
 		// A thread-mode case has no channel of its own to link.
 		AllowExistingSlackChannel: appCfg.Slack.AllowExistingChannel && !caseMode.IsThread(),
+		MentionBotIDs:             mentionBotIDs(appCfg.Slack.MentionBots, caseMode),
 	}, nil
 }
 
@@ -1252,11 +1314,13 @@ func BuildWorkspaceRegistry(workspaceConfigs []*WorkspaceConfig) *model.Workspac
 			SlackMonitorChannelID:   wc.SlackMonitorChannel,
 			AcceptBot:               wc.AcceptBot,
 			CaseStatusSet:           wc.CaseStatusSet,
+			CaseActions:             wc.CaseActions,
 			ReactionEmoji:           wc.ReactionEmoji,
 			SlackWorkspaceChannelID: wc.WorkspaceChannelID,
 			WorkspaceAgentPrompt:    wc.WorkspaceAgentPrompt,
 
 			AllowExistingSlackChannel: wc.AllowExistingSlackChannel,
+			MentionBotIDs:             wc.MentionBotIDs,
 		})
 	}
 

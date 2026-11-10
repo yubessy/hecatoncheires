@@ -762,6 +762,7 @@ channel_prefix = "risk"
 | `reaction` | string | No | — | Thread mode only. Emoji name (with or without surrounding colons, e.g. `incident` or `:incident:`) that starts a Case when added to a message. Must be **unique across workspaces**. Setting it in channel mode is a config error. Requires the `reactions:read` scope and the `reaction_added` event subscription; the bot must be a member of any channel where the emoji is used. See [Reaction-triggered case creation](slack.md#reaction-triggered-case-creation). |
 | `workspace_channel` | string | No | — | **Channel mode only.** A workspace-level shared channel ID (e.g. `C0123456789`) where the cross-case **workspace agent** runs. Parallels `channel` (the thread-mode monitored channel) but is a distinct role. Must be **unique across workspaces** (and must not collide with any workspace's monitored `channel`). Setting it in thread mode is a config error — there the monitored channel already hosts the agent. The bot must be a member. See [Workspace agent](#workspace-agent). |
 | `allow_existing_channel` | bool | No | `false` | **Channel mode only.** When `true`, the Web case-creation form lets the user link the new case to an existing Slack channel instead of creating one. Ignored in thread mode (startup warning). Requires the `channels:join` bot scope. See [Linking an existing channel](#linking-an-existing-channel). |
+| `mention_bots` | array of strings | No | `[]` | **Channel mode only.** Slack bot ids (`B…`) of the apps — a Slack Workflow, an integration bot — whose @mention in a Case channel the agent answers. Such a post names no Slack user, so the turn acts as the Case channel itself: it may read and change that Case (even a private one) and public Cases, and no other private Case. A mention from an app not listed here is ignored, and its bot id is written to the log (`ignoring a case-channel mention from an app not listed in [slack] mention_bots`, field `bot_id`) so you can find the id to add. An entry that is not a bot id (an app id `A…`, a bot user id `U…`, a display name) is a config error. Ignored in thread mode (startup warning). |
 
 When a case is created (channel mode), Hecatoncheires can automatically create a Slack channel with the naming pattern: `{channel_prefix}-{case_number}`.
 
@@ -864,8 +865,8 @@ prompt = "Prefer concise Japanese replies."
   config error); `prompt_file` is resolved relative to the config file's
   directory and behaves like a Job `prompt_file`. In channel mode the section
   requires `workspace_channel`; in thread mode it stands alone.
-- **Thread mode differences:** a thread-mode workspace has no Actions, so the
-  agent gets no Action tools, and it finishes a Case by moving it to a closed
+- **Thread mode differences:** the agent gets no Action tools in a thread-mode
+  workspace (Actions there are managed from the Web UI), and it finishes a Case by moving it to a closed
   board status (`case__update_case_status`) rather than with a separate close
   tool. In thread mode the agent runs on a channel-root mention **instead of**
   starting a Case there; Cases come from an @mention inside a thread. See
@@ -1222,6 +1223,28 @@ The Kanban board renders one column per `[[case.status]]` for thread-mode
 workspaces; dragging a Case into a `closed` column closes the Case. The
 investigation agent can also move a Case to a closed status when a mention
 indicates the issue is resolved.
+
+### Actions on thread-mode Cases (`[case] actions`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `actions` | bool | No | `false` | Thread mode only. Gives this workspace's Cases Actions: the case detail page shows the Related Actions section, Actions can be created on (and moved into) its Cases, and the agent that answers a mention in a Case thread gets the `core__*` action tools. Off by default, so a thread-mode workspace configured before the option existed keeps having no Actions. Channel-mode Cases always have Actions; setting it there is ignored with a startup warning. |
+
+```toml
+[case]
+initial = "triage"
+closed  = ["done"]
+actions = true
+```
+
+With the option off, creating an Action on one of the workspace's Cases (from
+any entry point) is rejected, and its Cases' detail pages show no Related
+Actions section. Turning it off after Actions were created leaves them stored
+but shown nowhere in the UI; `validate --check-db` reports them as
+`action_actions_disabled` (see [CLI → validate](cli.md#what---check-db-checks)).
+The thread-mode Action board is unaffected either way: the board of a
+thread-mode workspace always lists Cases. How these Actions are announced in
+Slack is described in [Slack → Actions in thread mode](slack.md#actions-in-thread-mode).
 
 ### Case trigger (thread mode)
 
