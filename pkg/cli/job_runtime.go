@@ -15,7 +15,6 @@ import (
 	"github.com/urfave/cli/v3"
 
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
-	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/actionwriter"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/casewriter"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/core"
 	knowledgetool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/knowledge"
@@ -737,8 +736,8 @@ type jobToolAdapters struct {
 
 // buildJobTools assembles the tool slice for a single Job invocation. Action
 // tools (read-only list/get plus the writer set) are bound only for
-// channel-mode workspaces: a thread-mode workspace manages no Actions, so the
-// Job agent must not be able to read or mutate them. Case-editing
+// channel-mode workspaces: a thread-mode workspace's Actions are managed from
+// the Web UI, and its Job agent must not be able to read or mutate them. Case-editing
 // (casewriter, incl. thread-mode board status), Slack post, web fetch and memo
 // tools are bound in both modes.
 func buildJobTools(deps jobRuntimeDeps, adapters jobToolAdapters, c *model.Case, ws *model.WorkspaceEntry) []gollem.Tool {
@@ -776,14 +775,9 @@ func buildJobTools(deps jobRuntimeDeps, adapters jobToolAdapters, c *model.Case,
 	}
 
 	out := make([]gollem.Tool, 0, 16)
-	// Action tools exist only where Actions exist: channel-mode workspaces.
-	// core.NewReadOnly also wires the case_ref read tools (CaseRefUC); those
-	// are case-reference lookups, not Actions, but they live in the core
-	// toolset, so thread-mode forgoes them along with the action tools.
-	if ws == nil || !ws.IsThreadMode() {
-		out = append(out, core.NewReadOnly(coreDeps)...)
-		out = append(out, actionwriter.New(coreDeps)...)
-	}
+	// Core tools follow the workspace mode and [case] actions; see
+	// job.CoreTools, which the eval harness shares.
+	out = append(out, job.CoreTools(ws, coreDeps)...)
 	out = append(out, casewriter.New(casewriter.Deps{
 		CaseUC:      adapters.caseUC,
 		WorkspaceID: wsID,

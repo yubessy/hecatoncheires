@@ -18,7 +18,6 @@ import (
 
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/budget"
 	agentkernel "github.com/m-mizutani/hecatoncheires/pkg/agent/kernel"
-	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/actionwriter"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/casewriter"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/core"
 	githubtool "github.com/m-mizutani/hecatoncheires/pkg/agent/tool/github"
@@ -434,6 +433,7 @@ func buildRegistry(wc *config.WorkspaceConfig) (*model.WorkspaceRegistry, *model
 		CaseMode:              wc.CaseMode,
 		SlackMonitorChannelID: wc.SlackMonitorChannel,
 		CaseStatusSet:         wc.CaseStatusSet,
+		CaseActions:           wc.CaseActions,
 
 		AllowExistingSlackChannel: wc.AllowExistingSlackChannel,
 	}
@@ -520,14 +520,8 @@ func buildJobRunner(
 			CaseRefUC:    uc.Case,
 		}
 		out := make([]gollem.Tool, 0, 16)
-		// Action tools exist only in channel-mode workspaces; thread-mode cases
-		// have no Actions and the usecase boundary rejects action writes there.
-		// Mirror the production Job runtime (pkg/cli/job_runtime.go), which gates
-		// the core/actionwriter tools on workspace mode.
-		if ws == nil || !ws.IsThreadMode() {
-			out = append(out, core.NewReadOnly(coreDeps)...)
-			out = append(out, actionwriter.New(coreDeps)...)
-		}
+		// Same core tools as the production Job runtime (job.CoreTools).
+		out = append(out, job.CoreTools(ws, coreDeps)...)
 		out = append(out, casewriter.New(casewriter.Deps{
 			CaseUC:      caseAdapter,
 			WorkspaceID: wsID,

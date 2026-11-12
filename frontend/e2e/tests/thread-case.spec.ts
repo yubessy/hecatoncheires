@@ -5,6 +5,8 @@ import { ActionListPage } from '../pages/ActionListPage';
 import { CaseListPage } from '../pages/CaseListPage';
 import { CaseFormPage } from '../pages/CaseFormPage';
 import { CaseDetailPage } from '../pages/CaseDetailPage';
+import { ActionFormPage } from '../pages/ActionFormPage';
+import { ActionDetailPage } from '../pages/ActionDetailPage';
 
 // The "review" workspace (frontend/e2e/fixtures/config.review.test.toml) is
 // configured in thread mode with a [case.status] set, so its board renders
@@ -26,13 +28,31 @@ test.describe('Thread-mode Case board', () => {
     expect(await board.columnExists('In Review')).toBeTruthy();
     expect(await board.columnExists('Done')).toBeTruthy();
 
-    // Thread mode has no Actions: the "New Action" button must be absent.
+    // The board lists Cases, so it offers no "New Action" button; Actions are
+    // managed from each case's detail page.
     expect(await board.hasNewActionButton()).toBeFalsy();
 
-    // The sidebar nav item is labelled "Board" (not "Actions") in thread mode.
+    // The sidebar lists the Case board, and, because the fixture workspace sets
+    // `[case] actions = true`, the Action board as a separate entry. With the
+    // option off the Actions entry is hidden, which Sidebar.test.tsx covers.
     const sidebar = page.locator('.h-side');
-    await expect(sidebar.getByText('Board', { exact: true })).toBeVisible();
-    await expect(sidebar.getByText('Actions', { exact: true })).toHaveCount(0);
+    const boardLink = sidebar.getByRole('link', { name: /^Board/ });
+    const actionsLink = sidebar.getByRole('link', { name: /^Actions/ });
+    await expect(boardLink).toHaveAttribute('href', `/ws/${THREAD_WS}/board`);
+    await expect(actionsLink).toHaveAttribute('href', `/ws/${THREAD_WS}/actions`);
+
+    // The Actions entry opens the Action board, not the Case board.
+    await actionsLink.click();
+    await expect(page).toHaveURL(new RegExp(`/ws/${THREAD_WS}/actions$`));
+    const actionBoard = new ActionListPage(page);
+    await actionBoard.waitForBoardLoad();
+    expect(await actionBoard.isPageLoaded()).toBeTruthy();
+    await expect(page.getByTestId('case-kanban-board')).toHaveCount(0);
+
+    // And the Board entry brings the Case board back.
+    await boardLink.click();
+    await expect(page).toHaveURL(new RegExp(`/ws/${THREAD_WS}/board$`));
+    await board.waitForBoardLoad();
   });
 
   test('still renders the Action board for a channel-mode workspace', async ({ page }) => {
@@ -47,9 +67,15 @@ test.describe('Thread-mode Case board', () => {
     const caseBoard = new CaseKanbanPage(page);
     expect(await caseBoard.isBoardVisible()).toBeFalsy();
 
-    // The sidebar keeps the "Actions" label for channel-mode workspaces.
+    // A channel-mode workspace lists Actions and has no Case board entry.
     const sidebar = page.locator('.h-side');
     await expect(sidebar.getByText('Actions', { exact: true })).toBeVisible();
+    await expect(sidebar.getByText('Board', { exact: true })).toHaveCount(0);
+
+    // Its /board URL forwards to the Action board.
+    await page.goto(`/ws/${CHANNEL_WS}/board`);
+    await expect(page).toHaveURL(new RegExp(`/ws/${CHANNEL_WS}/actions$`));
+    await actions.waitForBoardLoad();
   });
 
   test('New-case form hides the Private toggle in thread mode but shows it in channel mode', async ({ page }) => {
@@ -75,7 +101,7 @@ test.describe('Thread-mode Case board', () => {
     await caseForm.cancel();
   });
 
-  test('case detail in a thread-mode workspace: no Actions, editable board status, no Close button', async ({ page }) => {
+  test('case detail in a thread-mode workspace: editable board status, no Close button', async ({ page }) => {
     const caseList = new CaseListPage(page);
     const caseForm = new CaseFormPage(page);
     const detail = new CaseDetailPage(page);
@@ -90,8 +116,9 @@ test.describe('Thread-mode Case board', () => {
     await caseList.clickCaseByTitle('Thread Detail Case');
     expect(await detail.isPageLoaded()).toBeTruthy();
 
-    // bug 1: the Related Actions section is gone (its "open in actions" action is absent).
-    await expect(page.getByTestId('case-open-in-actions')).toHaveCount(0);
+    // The fixture workspace enables Actions, so its /actions route is the
+    // Action board and the Related Actions section links to it.
+    await expect(page.getByTestId('case-open-in-actions')).toBeVisible();
 
     // close button removed: thread mode closes via the board status, not a lifecycle button.
     await expect(page.getByTestId('close-case-button')).toHaveCount(0);
@@ -102,6 +129,60 @@ test.describe('Thread-mode Case board', () => {
     await expect(status).toBeVisible();
     await status.selectOption('in_review');
     await expect(status).toHaveValue('in_review');
+  });
+
+  // The fixture workspace sets `[case] actions = true`; with the option off
+  // (the default) the section is hidden, which CaseDetail.test.tsx covers.
+  test('a thread-mode case manages Actions from its detail page', async ({ page }) => {
+    const caseList = new CaseListPage(page);
+    const caseForm = new CaseFormPage(page);
+    const detail = new CaseDetailPage(page);
+    const actionForm = new ActionFormPage(page);
+    const actionDetail = new ActionDetailPage(page);
+    const caseTitle = `Thread Action Case ${Date.now()}`;
+    const actionTitle = `${caseTitle} Action`;
+
+    await caseList.navigate(THREAD_WS);
+    await caseList.waitForTableLoad();
+    await caseList.clickNewCaseButton();
+    await caseForm.createCase({ title: caseTitle, description: 'actions in thread mode' });
+    await caseList.waitForTableLoad();
+    await caseList.fillSearchFilter(caseTitle);
+    await caseList.clickCaseByTitle(caseTitle);
+    expect(await detail.isPageLoaded()).toBeTruthy();
+
+    // Create: the Related Actions section is available in thread mode.
+    await page.getByTestId('add-action-button').click();
+    await actionForm.createAction({ title: actionTitle, caseTitle });
+    const actionLink = page.locator('a').filter({ hasText: actionTitle }).first();
+    await expect(actionLink).toBeVisible();
+
+    // Update: change the status and confirm it round-trips after a reload.
+    await actionLink.click();
+    await expect(page).toHaveURL(/\/actions\/\d+$/);
+    await actionDetail.waitForPageLoad();
+    await actionDetail.changeStatus('IN_PROGRESS');
+    await page.reload();
+    await actionDetail.waitForPageLoad();
+    expect(await actionDetail.getStatus()).toBe('IN_PROGRESS');
+    await actionDetail.closeModal();
+    await expect(page).toHaveURL(/\/cases\/\d+$/);
+    await expect(page.locator('a').filter({ hasText: actionTitle }).first()).toBeVisible();
+
+    // The workspace's Action board lists the new Action, filtered to its case
+    // from the Related Actions link.
+    await page.getByTestId('case-open-in-actions').click();
+    await expect(page).toHaveURL(/\/actions\/case\/\d+$/);
+    const actionBoard = new ActionListPage(page);
+    await actionBoard.waitForBoardLoad();
+    await expect(actionBoard.getActionCardByTitle(actionTitle)).toBeVisible();
+
+    // The thread-mode board still lists Cases, not Actions.
+    const board = new CaseKanbanPage(page);
+    await board.navigate(THREAD_WS);
+    await board.waitForBoardLoad();
+    expect(await board.isBoardVisible()).toBeTruthy();
+    expect(await board.hasNewActionButton()).toBeFalsy();
   });
 
   test('Case list Status column shows the configured board status in thread mode', async ({ page }) => {
@@ -175,7 +256,7 @@ test('Case board uses the same compound field-filter links as the list', async (
     await page.getByTestId('aside-board-status').selectOption('in_review');
     await list.navigate(THREAD_WS);
   }
-  await page.goto(`/ws/${THREAD_WS}/actions?field.review_type=code&field.priority=high`);
+  await page.goto(`/ws/${THREAD_WS}/board?field.review_type=code&field.priority=high`);
   const cards = page.getByTestId('case-card');
   await expect(cards.filter({ hasText: `${prefix} code high` })).toBeVisible();
   await expect(cards.filter({ hasText: `${prefix} code low` })).toHaveCount(0);

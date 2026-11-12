@@ -1,6 +1,8 @@
 package model
 
 import (
+	"slices"
+
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/i18n"
@@ -79,6 +81,10 @@ type WorkspaceEntry struct {
 	// Cases in thread mode (the Kanban columns). Non-nil only for thread-mode
 	// workspaces; reuses the generic ActionStatusSet value type.
 	CaseStatusSet *ActionStatusSet
+	// CaseActions is [case] actions: whether the Cases of a thread-mode
+	// workspace have Actions. Default false. Meaningless in channel mode, where
+	// Cases always have Actions; read it through ActionsEnabled.
+	CaseActions bool
 	// ReactionEmoji is the Slack reaction (emoji name, without surrounding
 	// colons) that triggers case creation for this workspace. Empty when the
 	// reaction trigger is disabled. Only meaningful in thread mode, and unique
@@ -98,11 +104,34 @@ type WorkspaceEntry struct {
 	// channel instead of creating one ([slack] allow_existing_channel).
 	// Channel mode only; always false for a thread-mode workspace.
 	AllowExistingSlackChannel bool
+	// MentionBotIDs are the Slack bot ids ([slack] mention_bots) of the apps —
+	// a Slack workflow, an integration bot — whose @mention in a case channel is
+	// answered. Such a mention names no Slack user, so the turn acts as the case
+	// channel (CaseChannelActorID) and may change that case; only an app listed
+	// here may start one. Channel mode only; always empty for a thread-mode
+	// workspace.
+	MentionBotIDs []string
+}
+
+// AllowsMentionBot reports whether an @mention posted by the app with Slack
+// bot id botID may start a case-channel agent turn in this workspace.
+func (e *WorkspaceEntry) AllowsMentionBot(botID string) bool {
+	if e == nil || botID == "" {
+		return false
+	}
+	return slices.Contains(e.MentionBotIDs, botID)
 }
 
 // IsThreadMode reports whether this workspace uses thread-per-case binding.
 func (e *WorkspaceEntry) IsThreadMode() bool {
 	return e != nil && e.CaseMode.IsThread()
+}
+
+// ActionsEnabled reports whether this workspace's Cases have Actions: always
+// in channel mode, and in thread mode only when [case] actions opts in. A nil
+// entry (an unregistered workspace) reads as channel mode, the default.
+func (e *WorkspaceEntry) ActionsEnabled() bool {
+	return !e.IsThreadMode() || e.CaseActions
 }
 
 // WorkspaceRegistry holds workspace configurations.

@@ -198,15 +198,40 @@ so every entry point (GraphQL, Slack, agent tools, eval) is covered uniformly:
   channel-mode cases (no board status). The Web UI mirrors this: the
   close/reopen button shows only for channel-mode, the Kanban only for
   thread-mode.
-- **Actions belong to channel-mode only.** Thread-mode cases have no Actions
-  (the configurable status attaches to the Case itself there, not to Actions).
-  `ActionUseCase.CreateAction` and `UpdateAction`'s reparent path reject a
-  thread-mode parent / target (`ErrCaseThreadModeNoActions`). The agent tool
-  wiring additionally withholds the action (`core__*`) tools for thread-mode in
-  all three hosts (Job runtime, case-bound mention agent, eval env) so the LLM
-  is never offered a tool that can only error.
+- **Actions exist in both modes; their Slack notifications differ.** The
+  configurable status attaches to the Case itself in thread mode, but a
+  thread-mode Case still has Actions, created and managed from the Web UI. A
+  thread-mode Case has no Action cards: creating an Action posts a one-line
+  context-block reply in the Case thread, and every later notification (change,
+  step, comment, archive) is a context-block reply in that same thread naming
+  the Action, never broadcast and never folded into the channel notification
+  slot. The routing lives in `resolveActionNotifyTarget` / `postActionNotice`
+  (`pkg/usecase/action.go`), shared by the action, step and comment usecases.
+  A thread-mode workspace has Actions only when it sets `[case] actions = true`
+  (default off, so existing workspaces are unaffected): `CreateAction` and the
+  reparent path reject a Case of a workspace without them
+  (`ErrCaseActionsDisabled`), and the Web UI reads `actionsEnabled` to hide the
+  section. On the agent side only the thread-case **mention** turn of such a
+  workspace gets the action (`core__*`) tools: its scope sets
+  `Scope.ThreadModeActions`, which its sub-agents inherit, and the kernel
+  withholds the core toolset (`OmitCore`) from every other run there — create
+  and materialize turns and the workspace agent, whose prompts are built
+  around the Case board status. Jobs are the one narrower grant, in every
+  thread-mode workspace: the Job host sets `Scope.ThreadModeReads`, and the
+  kernel builds only the read half of the core toolset
+  (`ToolSetDeps.CoreAccess`), so `core_ro` resolves and `core` / `core_job`
+  resolve to nothing. That read half is the case_ref lookups
+  (`core__search_referenceable_cases` / `core__get_referenceable_cases`)
+  always — a case_ref field exists in either mode, and the Job can already set
+  one through `case__update_case` — plus the action reads when the workspace
+  sets `[case] actions = true` (`CoreAccessReadOnly` vs
+  `CoreAccessCaseRefOnly`). The kernel re-checks `ActionsEnabled()` at claim
+  time, so a run spawned before the option was turned off reads no Actions.
+  The in-process Job tool builders (CLI fallback and eval env) share the same
+  decision through `job.CoreTools`, and the Job system prompt lists the
+  Actions as read-only when they are readable.
 - **Thread-mode Jobs embed the thread's recent messages in the system prompt.**
-  Because a thread-mode Job has no Actions to anchor on, `JobRunner` loads the
+  Because a thread-mode Job usually has no Actions to anchor on (it can only read them, and only with `[case] actions = true`), `JobRunner` loads the
   Case's recent Slack messages (`CaseMessageRepository.List`, bounded to the
   newest `recentMessageMaxCount` = 32 within `recentMessageWindow` = 24h of the
   run start, ordered oldest-first) and renders them in a dedicated system-prompt

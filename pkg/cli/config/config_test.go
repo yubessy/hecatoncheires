@@ -1660,6 +1660,68 @@ type = "text"
 		gt.Value(t, configs[0].CaseTrigger).Equal(model.CaseTriggerInstant)
 		// case_summary defaults to full when omitted.
 		gt.Value(t, configs[0].CaseSummary).Equal(model.CaseSummaryFull)
+		// [case] actions defaults to off, so the workspace has no Actions.
+		gt.Value(t, configs[0].CaseActions).Equal(false)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("support")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.ActionsEnabled()).False()
+	})
+
+	t.Run("thread mode enables actions with [case] actions", func(t *testing.T) {
+		configs, err := writeAndLoad(t, `
+[workspace]
+id = "support"
+
+[slack]
+mode = "thread"
+channel = "C0123ABC"
+
+[case]
+initial = "TRIAGE"
+closed = ["DONE"]
+actions = true
+
+  [[case.status]]
+  id = "TRIAGE"
+  name = "Triage"
+
+  [[case.status]]
+  id = "DONE"
+  name = "Done"
+
+[[fields]]
+id = "a"
+name = "A"
+type = "text"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseActions).Equal(true)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("support")
+		gt.NoError(t, err).Required()
+		gt.Value(t, entry.CaseActions).Equal(true)
+		gt.Bool(t, entry.ActionsEnabled()).True()
+	})
+
+	t.Run("channel mode ignores [case] actions and always has actions", func(t *testing.T) {
+		configs, err := writeAndLoad(t, `
+[workspace]
+id = "risk"
+
+[case]
+actions = true
+
+[[fields]]
+id = "a"
+name = "A"
+type = "text"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseActions).Equal(false)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.ActionsEnabled()).True()
 	})
 
 	t.Run("thread mode selects mention trigger", func(t *testing.T) {
@@ -2907,6 +2969,83 @@ initial = "TRIAGE"
 		gt.NoError(t, err).Required()
 		gt.Bool(t, entry.AllowExistingSlackChannel).False()
 	})
+}
+
+// TestLoadWorkspaceConfigs_MentionBots tests [slack] mention_bots: empty by
+// default, carried to the registry entry in channel mode, dropped for a
+// thread-mode workspace, and rejected when an entry is not a Slack bot id.
+func TestLoadWorkspaceConfigs_MentionBots(t *testing.T) {
+	load := func(t *testing.T, content string) ([]*config.WorkspaceConfig, error) {
+		t.Helper()
+		configPath := filepath.Join(t.TempDir(), "config.toml")
+		gt.NoError(t, os.WriteFile(configPath, []byte(content), 0644)).Required()
+		return config.LoadWorkspaceConfigs([]string{configPath})
+	}
+
+	t.Run("omitted means no app may mention", func(t *testing.T) {
+		configs, err := load(t, `
+[workspace]
+id = "risk"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs[0].MentionBotIDs).Length(0)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.AllowsMentionBot("B0WORKFLOW1")).False()
+	})
+
+	t.Run("listed bots reach the registry entry in channel mode", func(t *testing.T) {
+		configs, err := load(t, `
+[workspace]
+id = "risk"
+
+[slack]
+mention_bots = ["B0WORKFLOW1", "B0INTEGRATE2"]
+`)
+		gt.NoError(t, err).Required()
+		gt.Value(t, configs[0].MentionBotIDs).Equal([]string{"B0WORKFLOW1", "B0INTEGRATE2"})
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.AllowsMentionBot("B0WORKFLOW1")).True()
+		gt.Bool(t, entry.AllowsMentionBot("B0INTEGRATE2")).True()
+		gt.Bool(t, entry.AllowsMentionBot("B0OTHERAPP")).False()
+	})
+
+	t.Run("thread mode ignores the list", func(t *testing.T) {
+		configs, err := load(t, `
+[workspace]
+id = "support"
+
+[slack]
+mode = "thread"
+channel = "C0123ABC"
+mention_bots = ["B0WORKFLOW1"]
+
+[case]
+initial = "TRIAGE"
+  [[case.status]]
+  id = "TRIAGE"
+  name = "Triage"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs[0].MentionBotIDs).Length(0)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("support")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.AllowsMentionBot("B0WORKFLOW1")).False()
+	})
+
+	for _, bad := range []string{"A0APPID01", "U0BOTUSER1", "Sample Workflow", "b0lower", ""} {
+		t.Run("rejects "+bad, func(t *testing.T) {
+			_, err := load(t, `
+[workspace]
+id = "risk"
+
+[slack]
+mention_bots = ["`+bad+`"]
+`)
+			gt.Error(t, err).Is(config.ErrInvalidMentionBot)
+		})
+	}
 }
 
 // TestLoadWorkspaceConfigs_WorkspaceChannel tests the [slack] workspace_channel

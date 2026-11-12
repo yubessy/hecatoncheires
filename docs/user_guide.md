@@ -55,7 +55,8 @@ The Case detail **Back** button also restores the originating list's fields.
 | Either category | `/ws/support/cases?field.category=it&field.category=sales` |
 | Either category and either priority | `/ws/support/cases?field.category=it&field.category=sales&field.priority=high&field.priority=urgent` |
 | Category and priority, closed Cases | `/ws/support/cases?status=closed&field.category=it&field.priority=high` |
-| The same category on a board | `/ws/support/actions?field.category=it` |
+| The same category on the Action board | `/ws/support/actions?field.category=it` |
+| The same category on the Case board (thread mode) | `/ws/support/board?field.category=it` |
 
 Use `field.<field-id>=<value>` and repeat the parameter for additional values;
 values are not split on commas. Use stable field / option **IDs**, not display
@@ -715,6 +716,10 @@ so the Action's Activity feed and the Slack thread stay aligned:
 | Step reverted to ongoing | `STEP_REOPENED`         | `:arrow_backward: {actor} reopened step "{title}"`  |
 | Step renamed           | `STEP_TITLE_CHANGED`      | `:pencil2: {actor} renamed step "{old}" -> "{new}"` |
 
+In a thread-mode Case these are replies in the Case thread instead, prefixed
+with the Action they are about and never broadcast (see
+[Slack → Actions in thread mode](slack.md#actions-in-thread-mode)).
+
 All Step lifecycle notifications are posted with `reply_broadcast=true`, so
 they appear inside the Action's thread AND surface in the parent Case channel
 as "Also sent to #channel". This keeps channel watchers aware of progress
@@ -1021,6 +1026,21 @@ agent validates the values before saving: unknown fields, invalid option ids,
 and assignees / user fields that are not known Slack users are refused with an
 explanation rather than written.
 
+The agent acts with the access of the person who mentioned it, so it cannot
+read a private Case that person is not a channel member of. A mention posted
+by an app rather than a person — a Slack Workflow step, an integration bot —
+names no Slack user. In a channel-mode Case channel such a mention is
+answered only when the workspace lists the app's bot id in `[slack]
+mention_bots` (see [configuration.md](configuration.md)); a mention from any
+other app is ignored. The agent then acts as **the Case channel itself**: it may read
+and change the Case bound to that channel (even a private one, since its reply
+lands in front of that channel's members) and any public Case, but no other
+private Case. Changes it makes are attributed to the system rather than to a
+user. Workspace `[authz]` policies are not evaluated for such a mention in the
+Case's own workspace, the same as for other bot-authored events; every other
+workspace that has a policy refuses it, so the agent cannot use it to reach a
+workspace closed to that channel's members.
+
 Two turns never run concurrently on the same thread: every turn is spawned on
 the agent runtime under the thread's subject, and the runtime admits one live
 run per subject.
@@ -1125,7 +1145,7 @@ the thread.
 
 | Surface | Purpose | Behaviour |
 |---|---|---|
-| **Thread** | Per-event audit log. Always one Slack message per change. | Every Action / ActionStep change posts a new context block as a thread reply on the Action card. Never collapsed, never updated. |
+| **Thread** | Per-event audit log. Always one Slack message per change. | Every Action / ActionStep change posts a new context block as a thread reply on the Action card (in a thread-mode Case: in the Case thread, naming the Action). Never collapsed, never updated. |
 | **Channel** | High-signal visibility into recent change activity. | A single editable "channel message" aggregates the latest changes within a rolling slot window. |
 
 ### Notification slot (channel-side aggregation)
