@@ -284,7 +284,7 @@ func New(repo interfaces.Repository, registry *model.WorkspaceRegistry, opts ...
 	uc.Action = NewActionUseCase(repo, registry, uc.slackService, uc.baseURL, slotCoord)
 	uc.Action.workspaceAccess = uc.WorkspaceAccess
 	uc.Memo = NewMemoUseCase(repo, registry)
-	uc.Knowledge = NewKnowledgeUseCase(repo, uc.embedClient)
+	uc.Knowledge = NewKnowledgeUseCase(repo, registry, uc.embedClient)
 	uc.Tag = NewTagUseCase(repo)
 	uc.ActionStep = NewActionStepUseCase(repo, registry, uc.slackService, slotCoord)
 	uc.ActionComment = NewActionCommentUseCase(repo, registry, uc.slackService, uc.baseURL, slotCoord)

@@ -73,8 +73,10 @@ A **workspace-wide shared knowledge entry**: organization-specific information
 that does not exist in the LLM's general knowledge (operating rules, internal
 proper nouns, past judgements, threat intel, …), captured so it can be reused on
 future Case processing. A Knowledge entry has a title, a single Markdown `claim`
-body, and one or more free-form `tags`; it is **not** tied to a Case and carries
-no custom fields. Both humans (via the WebUI **Knowledge** section) and AI agents
+body, and one or more free-form `tags`; it is **not** tied to a Case. Each entry
+belongs to one workspace-defined **kind**, and a kind may define custom fields
+(see [Configuration → Knowledge Section](configuration.md#knowledge-section)); a
+workspace that defines no kinds has a single kind with no fields. Both humans (via the WebUI **Knowledge** section) and AI agents
 (via the `knowledge__*` tools) read and write it. Entries are retrieved by
 semantic search (embedding-based, with a substring fallback) and by tag filter.
 See [User Guide → Knowledge](user_guide.md#knowledge).

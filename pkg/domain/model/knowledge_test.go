@@ -7,6 +7,7 @@ import (
 
 	"github.com/m-mizutani/gt"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
+	"github.com/m-mizutani/hecatoncheires/pkg/domain/types"
 )
 
 func TestNewKnowledgeID(t *testing.T) {
@@ -42,6 +43,21 @@ func TestKnowledgeValidate(t *testing.T) {
 	t.Run("valid with embedding of correct dimension", func(t *testing.T) {
 		k := valid()
 		k.Embedding = make([]float64, model.EmbeddingDimension)
+		gt.NoError(t, k.Validate())
+	})
+
+	t.Run("valid with a kind and field values", func(t *testing.T) {
+		k := valid()
+		k.KindID = "glossary"
+		k.FieldValues = map[string]model.FieldValue{
+			"aliases": {FieldID: "aliases", Type: types.FieldTypeText, Value: "alias"},
+		}
+		gt.NoError(t, k.Validate())
+	})
+
+	t.Run("an empty kind id is valid: it means the default kind", func(t *testing.T) {
+		k := valid()
+		k.KindID = ""
 		gt.NoError(t, k.Validate())
 	})
 

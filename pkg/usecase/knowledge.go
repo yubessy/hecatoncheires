@@ -11,6 +11,7 @@ import (
 	"github.com/m-mizutani/goerr/v2"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/model"
+	"github.com/m-mizutani/hecatoncheires/pkg/domain/model/config"
 	"github.com/m-mizutani/hecatoncheires/pkg/utils/errutil"
 )
 
@@ -19,13 +20,16 @@ import (
 // degrades gracefully (no semantic vectors, substring search fallback).
 type KnowledgeUseCase struct {
 	repo        interfaces.Repository
+	registry    *model.WorkspaceRegistry
 	embedClient interfaces.EmbedClient
 }
 
-// NewKnowledgeUseCase constructs a KnowledgeUseCase. embedClient may be nil
+// NewKnowledgeUseCase constructs a KnowledgeUseCase. registry supplies each
+// workspace's knowledge kinds; a nil registry means no workspace defines any,
+// so every workspace has the single implicit kind. embedClient may be nil
 // (fail-open: create/update still succeed and search falls back to substring).
-func NewKnowledgeUseCase(repo interfaces.Repository, embedClient interfaces.EmbedClient) *KnowledgeUseCase {
-	return &KnowledgeUseCase{repo: repo, embedClient: embedClient}
+func NewKnowledgeUseCase(repo interfaces.Repository, registry *model.WorkspaceRegistry, embedClient interfaces.EmbedClient) *KnowledgeUseCase {
+	return &KnowledgeUseCase{repo: repo, registry: registry, embedClient: embedClient}
 }
 
 // ErrKnowledgeInput is returned when create/update input fails validation at the
@@ -49,11 +53,26 @@ var ErrKnowledgeInput = goerr.New("invalid knowledge input", goerr.T(errutil.Tag
 // verifyTagsExist is NOT this sentinel and stays reportable.
 var ErrUnknownTag = goerr.New("unknown tag id", goerr.T(errutil.TagBenign))
 
+// ErrUnknownKnowledgeKind is returned when a knowledge write names a kind the
+// workspace does not define, or sends field values for an entry whose stored
+// kind has since been removed from the configuration.
+//
+// Tagged benign for the same reason as ErrKnowledgeInput: it rejects what the
+// caller sent, and the agent that hits it can repair it with its next call.
+var ErrUnknownKnowledgeKind = goerr.New("unknown knowledge kind", goerr.T(errutil.TagBenign))
+
 // CreateKnowledgeInput is the domain-level input for creating a knowledge entry.
 type CreateKnowledgeInput struct {
 	Title  string
 	Claim  string
 	TagIDs []model.TagID
+	// KindID names the workspace knowledge kind; empty means the workspace's
+	// default kind.
+	KindID string
+	// FieldValues are the kind's custom field values, validated in full
+	// against the kind's schema (required fields enforced, unknown ids
+	// rejected).
+	FieldValues map[string]model.FieldValue
 }
 
 // Validate enforces input invariants at the entry point: a title and at least
@@ -74,12 +93,16 @@ func (input CreateKnowledgeInput) Validate() error {
 }
 
 // UpdateKnowledgeInput is the domain-level input for updating a knowledge entry.
-// Title / Claim / TagIDs are pointers: nil means "leave unchanged".
+// Title / Claim / TagIDs are pointers: nil means "leave unchanged". The kind of
+// an entry cannot be changed.
 type UpdateKnowledgeInput struct {
 	ID     model.KnowledgeID
 	Title  *string
 	Claim  *string
 	TagIDs *[]model.TagID
+	// FieldValues is a patch merged over the stored values. Nil or empty
+	// leaves the stored values unchanged and runs no field validation.
+	FieldValues map[string]model.FieldValue
 }
 
 // Validate enforces input invariants for the fields that are present.
@@ -119,8 +142,26 @@ func (uc *KnowledgeUseCase) CreateKnowledge(ctx context.Context, workspaceID str
 		return nil, err
 	}
 
+	cfg, err := uc.knowledgeConfig(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	kind, ok := cfg.Kind(input.KindID)
+	if !ok {
+		return nil, goerr.Wrap(ErrUnknownKnowledgeKind, "knowledge kind is not defined in the workspace",
+			goerr.V("workspace_id", workspaceID), goerr.V("kind_id", input.KindID))
+	}
+
 	tagIDs := model.NormalizeTagIDs(input.TagIDs)
 	if err := uc.verifyTagsExist(ctx, workspaceID, tagIDs); err != nil {
+		return nil, err
+	}
+
+	fieldValues, err := model.NewFieldValidator(kind.FieldSchema).ValidateCaseFieldsAll(input.FieldValues)
+	if err != nil {
+		return nil, knowledgeFieldError(err, workspaceID, kind.ID)
+	}
+	if err := verifyFieldValueUsersExist(ctx, uc.repo, fieldValues, "knowledge"); err != nil {
 		return nil, err
 	}
 
@@ -131,6 +172,8 @@ func (uc *KnowledgeUseCase) CreateKnowledge(ctx context.Context, workspaceID str
 		Title:       strings.TrimSpace(input.Title),
 		Claim:       input.Claim,
 		TagIDs:      tagIDs,
+		KindID:      cfg.StoredKindID(kind.ID),
+		FieldValues: fieldValues,
 		CreatorID:   creatorFromContext(ctx),
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -196,6 +239,13 @@ func (uc *KnowledgeUseCase) UpdateKnowledge(ctx context.Context, workspaceID str
 		}
 		knowledge.TagIDs = tagIDs
 	}
+	if len(input.FieldValues) > 0 {
+		merged, err := uc.patchKnowledgeFields(ctx, workspaceID, knowledge, input.FieldValues)
+		if err != nil {
+			return nil, err
+		}
+		knowledge.FieldValues = merged
+	}
 	if contentChanged {
 		knowledge.Embedding = uc.embedKnowledge(ctx, knowledge)
 	}
@@ -220,6 +270,56 @@ func (uc *KnowledgeUseCase) DeleteKnowledge(ctx context.Context, workspaceID str
 			goerr.V("workspace_id", workspaceID), goerr.V("knowledge_id", id))
 	}
 	return nil
+}
+
+// knowledgeConfig returns the workspace's knowledge configuration. A nil result
+// is meaningful — the workspace has the single implicit kind — and is what a
+// usecase without a registry answers for every workspace.
+func (uc *KnowledgeUseCase) knowledgeConfig(workspaceID string) (*config.KnowledgeConfig, error) {
+	if uc.registry == nil {
+		return nil, nil
+	}
+	entry, err := uc.registry.Get(workspaceID)
+	if err != nil {
+		return nil, goerr.Wrap(err, "failed to resolve workspace for knowledge",
+			goerr.V("workspace_id", workspaceID))
+	}
+	return entry.KnowledgeConfig, nil
+}
+
+// patchKnowledgeFields validates a field-value patch against the stored entry's
+// kind and returns the stored values with the patch merged over them. The patch
+// alone is validated (unknown ids rejected, required fields not re-demanded), so
+// an entry written before a field became required stays editable.
+func (uc *KnowledgeUseCase) patchKnowledgeFields(ctx context.Context, workspaceID string, k *model.Knowledge, patch map[string]model.FieldValue) (map[string]model.FieldValue, error) {
+	cfg, err := uc.knowledgeConfig(workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	kind, ok := cfg.Kind(k.KindID)
+	if !ok {
+		return nil, goerr.Wrap(ErrUnknownKnowledgeKind,
+			"the entry's knowledge kind is no longer defined in the workspace; its fields cannot be edited",
+			goerr.V("workspace_id", workspaceID), goerr.V("knowledge_id", k.ID), goerr.V("kind_id", k.KindID))
+	}
+
+	validated, err := model.NewFieldValidator(kind.FieldSchema).ValidateCaseFieldsPartialStrict(patch)
+	if err != nil {
+		return nil, knowledgeFieldError(err, workspaceID, kind.ID)
+	}
+	if err := verifyFieldValueUsersExist(ctx, uc.repo, validated, "knowledge"); err != nil {
+		return nil, err
+	}
+	return mergeFieldValues(k.FieldValues, validated), nil
+}
+
+// knowledgeFieldError wraps a field validation failure. It is tagged benign: it
+// rejects what the caller sent, and for the agent that is its own to repair.
+// errors.Is against the validator's sentinels keeps holding.
+func knowledgeFieldError(err error, workspaceID, kindID string) error {
+	return goerr.Wrap(err, "knowledge field validation failed",
+		goerr.T(errutil.TagBenign),
+		goerr.V("workspace_id", workspaceID), goerr.V("kind_id", kindID))
 }
 
 // verifyTagsExist ensures every tag id exists in the workspace. It loads the

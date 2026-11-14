@@ -346,6 +346,7 @@ type AppConfig struct {
 	Action    *ActionSection      `toml:"action"`
 	Case      *CaseSection        `toml:"case"`
 	Memo      *MemoSection        `toml:"memo"`
+	Knowledge *KnowledgeSection   `toml:"knowledge"`
 	Jobs      []JobSection        `toml:"job"`
 	Authz     *AuthzSection       `toml:"authz"`
 }
@@ -359,6 +360,98 @@ type MemoSection struct {
 	// Fields are the memo custom field definitions ([[memo.fields]]), reusing
 	// the same FieldDefinition schema as Case fields.
 	Fields []FieldDefinition `toml:"fields"`
+}
+
+// KnowledgeSection represents the [knowledge] section in a TOML config. When
+// omitted (nil) the workspace has the single implicit knowledge kind
+// (domainConfig.ImplicitKnowledgeKindID) with no custom fields, which is the
+// Knowledge shape that predates kinds.
+type KnowledgeSection struct {
+	// DefaultKind is the kind a Knowledge entry belongs to when it records
+	// none: every entry written before the workspace defined kinds, and a
+	// create that names no kind. Required; must name one of Kinds.
+	DefaultKind string `toml:"default_kind"`
+	// Kinds are the knowledge kind definitions ([[knowledge.kinds]]). At least
+	// one is required.
+	Kinds []KnowledgeKindSection `toml:"kinds"`
+}
+
+// KnowledgeKindSection represents a single [[knowledge.kinds]] entry.
+type KnowledgeKindSection struct {
+	ID          string `toml:"id"`
+	Name        string `toml:"name"`
+	Description string `toml:"description"`
+	// Fields are the kind's custom field definitions
+	// ([[knowledge.kinds.fields]]), reusing the same FieldDefinition schema as
+	// Case fields.
+	Fields []FieldDefinition `toml:"fields"`
+}
+
+// Validate checks the [knowledge] section: at least one kind, unique kind ids
+// in the field id format, a name per kind, a default_kind naming one of them,
+// and per-kind field definitions valid under the [[fields]] rules with unique
+// ids and no case_ref types.
+func (k *KnowledgeSection) Validate() error {
+	if len(k.Kinds) == 0 {
+		return goerr.Wrap(ErrMissingKnowledgeKinds, "[knowledge] requires at least one [[knowledge.kinds]]")
+	}
+
+	kindIDs := make(map[string]bool, len(k.Kinds))
+	for idx, kind := range k.Kinds {
+		if !fieldIDPattern.MatchString(kind.ID) {
+			return goerr.Wrap(ErrInvalidKnowledgeKindID,
+				fmt.Sprintf("knowledge kind id %q must match pattern ^[a-z][a-z0-9_]*$", kind.ID),
+				goerr.V(KnowledgeKindIDKey, kind.ID),
+				goerr.V(FieldIndexKey, idx))
+		}
+		if kindIDs[kind.ID] {
+			return goerr.Wrap(ErrDuplicateKnowledgeKindID,
+				fmt.Sprintf("duplicate knowledge kind id %q", kind.ID),
+				goerr.V(KnowledgeKindIDKey, kind.ID))
+		}
+		kindIDs[kind.ID] = true
+		if kind.Name == "" {
+			return goerr.Wrap(ErrMissingName,
+				fmt.Sprintf("knowledge kind %q requires a name", kind.ID),
+				goerr.V(KnowledgeKindIDKey, kind.ID))
+		}
+
+		fieldIDs := make(map[string]bool, len(kind.Fields))
+		for fieldIdx, field := range kind.Fields {
+			if err := field.Validate(); err != nil {
+				return goerr.Wrap(err, fmt.Sprintf("invalid field in knowledge kind %q", kind.ID),
+					goerr.V(KnowledgeKindIDKey, kind.ID),
+					goerr.V(FieldIndexKey, fieldIdx))
+			}
+			// Case-reference fields are a Case-only feature, for the same
+			// reason as in [memo]: the picker, the agent tools and the
+			// existence / privacy verification all hang off the Case path.
+			if types.FieldType(field.Type).IsCaseRef() {
+				return goerr.Wrap(ErrUnexpectedReferenceWorkspace,
+					fmt.Sprintf("case_ref fields are not supported in knowledge kind %q", kind.ID),
+					goerr.V(KnowledgeKindIDKey, kind.ID),
+					goerr.V(FieldIDKey, field.ID),
+					goerr.V(FieldTypeKey, field.Type))
+			}
+			if fieldIDs[field.ID] {
+				return goerr.Wrap(ErrDuplicateFieldID,
+					fmt.Sprintf("duplicate field id %q in knowledge kind %q", field.ID, kind.ID),
+					goerr.V(KnowledgeKindIDKey, kind.ID),
+					goerr.V(FieldIDKey, field.ID))
+			}
+			fieldIDs[field.ID] = true
+		}
+	}
+
+	if k.DefaultKind == "" {
+		return goerr.Wrap(ErrInvalidDefaultKnowledgeKind, "[knowledge] default_kind is required")
+	}
+	if !kindIDs[k.DefaultKind] {
+		return goerr.Wrap(ErrInvalidDefaultKnowledgeKind,
+			fmt.Sprintf("[knowledge] default_kind %q names no [[knowledge.kinds]] entry", k.DefaultKind),
+			goerr.V(KnowledgeKindIDKey, k.DefaultKind))
+	}
+	return nil
 }
 
 // ActionSection represents the [action] section in a TOML config.
@@ -395,10 +488,13 @@ type WorkspaceConfig struct {
 	SlackWelcomeMessages []string
 	FieldSchema          *domainConfig.FieldSchema
 	MemoConfig           *domainConfig.MemoConfig
-	ActionStatusSet      *model.ActionStatusSet
-	CompilePrompt        string
-	AssistPrompt         string
-	AssistLanguage       string
+	// KnowledgeConfig is the [knowledge] configuration; nil when the section
+	// is absent, which means the single implicit kind.
+	KnowledgeConfig *domainConfig.KnowledgeConfig
+	ActionStatusSet *model.ActionStatusSet
+	CompilePrompt   string
+	AssistPrompt    string
+	AssistLanguage  string
 	// Language is the validated [workspace] language; empty when unset.
 	Language i18n.Lang
 	// CaseCreatePrompt is the workspace-specific additional prompt for the
@@ -646,6 +742,14 @@ func (a *AppConfig) Validate() error {
 					goerr.V(FieldIDKey, field.ID))
 			}
 			memoFieldIDs[field.ID] = true
+		}
+	}
+
+	// [knowledge] is optional. When supplied, validate kinds and their field
+	// definitions eagerly so schema errors surface at startup.
+	if a.Knowledge != nil {
+		if err := a.Knowledge.Validate(); err != nil {
+			return goerr.Wrap(err, "invalid [knowledge] section")
 		}
 	}
 
@@ -1208,6 +1312,7 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		SlackWelcomeMessages: appCfg.Slack.WelcomeMessages,
 		FieldSchema:          appCfg.ToDomainFieldSchema(),
 		MemoConfig:           appCfg.ToDomainMemoConfig(),
+		KnowledgeConfig:      appCfg.ToDomainKnowledgeConfig(),
 		ActionStatusSet:      statusSet,
 		CompilePrompt:        appCfg.Compile.Prompt,
 		AssistPrompt:         appCfg.Assist.Prompt,
@@ -1295,6 +1400,7 @@ func BuildWorkspaceRegistry(workspaceConfigs []*WorkspaceConfig) *model.Workspac
 			},
 			FieldSchema:             wc.FieldSchema,
 			MemoConfig:              wc.MemoConfig,
+			KnowledgeConfig:         wc.KnowledgeConfig,
 			ActionStatusSet:         wc.ActionStatusSet,
 			SlackChannelPrefix:      wc.SlackChannelPrefix,
 			SlackTeamID:             wc.SlackTeamID,
@@ -1387,5 +1493,29 @@ func (a *AppConfig) ToDomainMemoConfig() *domainConfig.MemoConfig {
 		FieldSchema: &domainConfig.FieldSchema{
 			Fields: toDomainFields(a.Memo.Fields),
 		},
+	}
+}
+
+// ToDomainKnowledgeConfig converts the [knowledge] section to a domain
+// KnowledgeConfig. Returns nil when [knowledge] is omitted: a nil
+// KnowledgeConfig is the workspace with the single implicit kind.
+func (a *AppConfig) ToDomainKnowledgeConfig() *domainConfig.KnowledgeConfig {
+	if a.Knowledge == nil {
+		return nil
+	}
+	kinds := make([]domainConfig.KnowledgeKind, len(a.Knowledge.Kinds))
+	for i, k := range a.Knowledge.Kinds {
+		kinds[i] = domainConfig.KnowledgeKind{
+			ID:          k.ID,
+			Name:        k.Name,
+			Description: k.Description,
+			FieldSchema: &domainConfig.FieldSchema{
+				Fields: toDomainFields(k.Fields),
+			},
+		}
+	}
+	return &domainConfig.KnowledgeConfig{
+		DefaultKindID: a.Knowledge.DefaultKind,
+		Kinds:         kinds,
 	}
 }

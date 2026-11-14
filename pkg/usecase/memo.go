@@ -277,6 +277,15 @@ func (uc *MemoUseCase) validateMemoFields(ctx context.Context, workspaceID strin
 // field values exists in the SlackUser store (Slack sync delay is treated as
 // non-existence, mirroring the case write contract).
 func (uc *MemoUseCase) verifyMemoUsersExist(ctx context.Context, fieldValues map[string]model.FieldValue) error {
+	return verifyFieldValueUsersExist(ctx, uc.repo, fieldValues, "memo")
+}
+
+// verifyFieldValueUsersExist confirms every user id referenced by user /
+// multi-user field values exists in the SlackUser store. It is shared by the
+// entities whose custom fields hold user ids without an accompanying assignee
+// list (Memo, Knowledge); entity names the write in the lookup error. Unknown
+// ids are reported together via ErrUnknownUser.
+func verifyFieldValueUsersExist(ctx context.Context, repo interfaces.Repository, fieldValues map[string]model.FieldValue, entity string) error {
 	idSet := make(map[string]struct{})
 	for _, fv := range fieldValues {
 		switch fv.Type {
@@ -300,9 +309,9 @@ func (uc *MemoUseCase) verifyMemoUsersExist(ctx context.Context, fieldValues map
 	for id := range idSet {
 		ids = append(ids, model.SlackUserID(id))
 	}
-	found, err := uc.repo.SlackUser().GetByIDs(ctx, ids)
+	found, err := repo.SlackUser().GetByIDs(ctx, ids)
 	if err != nil {
-		return goerr.Wrap(err, "failed to look up users for memo write")
+		return goerr.Wrap(err, "failed to look up users for "+entity+" write")
 	}
 
 	var missing []string

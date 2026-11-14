@@ -20,7 +20,7 @@ import (
 func buildKnowledgeDeps(t *testing.T) (jobagent.ReflectorDeps, *memory.Memory) {
 	t.Helper()
 	repo := memory.New()
-	kUC := usecase.NewKnowledgeUseCase(repo, nil)
+	kUC := usecase.NewKnowledgeUseCase(repo, nil, nil)
 	tUC := usecase.NewTagUseCase(repo)
 	acc := usecase.NewKnowledgeToolAccessor(kUC, tUC)
 	mut := usecase.NewKnowledgeToolMutator(kUC, tUC)

@@ -1356,3 +1356,109 @@ func TestValidateDBWithConfig_NilRegistryIsAnError(t *testing.T) {
 	gt.Value(t, result).Nil()
 	gt.Value(t, err).NotNil()
 }
+
+func TestValidateDB_Knowledge(t *testing.T) {
+	ctx := context.Background()
+	configuredWS := "ws-knowledge-kinds"
+	implicitWS := "ws-knowledge-implicit"
+
+	repo := memory.New()
+	registry := model.NewWorkspaceRegistry()
+	registry.Register(&model.WorkspaceEntry{
+		Workspace:   model.Workspace{ID: configuredWS, Name: "Knowledge Kinds"},
+		FieldSchema: &config.FieldSchema{Labels: config.EntityLabels{Case: "Case"}},
+		KnowledgeConfig: &config.KnowledgeConfig{
+			DefaultKindID: "note",
+			Kinds: []config.KnowledgeKind{
+				{ID: "note", Name: "Note", FieldSchema: &config.FieldSchema{Fields: []config.FieldDefinition{}}},
+				{ID: "glossary", Name: "Glossary", FieldSchema: &config.FieldSchema{Fields: []config.FieldDefinition{
+					{ID: "scope", Name: "Scope", Type: types.FieldTypeSelect, Required: true,
+						Options: []config.FieldOption{{ID: "team", Name: "Team"}}},
+				}}},
+			},
+		},
+	})
+	registry.Register(&model.WorkspaceEntry{
+		Workspace:   model.Workspace{ID: implicitWS, Name: "Implicit Knowledge"},
+		FieldSchema: &config.FieldSchema{Labels: config.EntityLabels{Case: "Case"}},
+	})
+	uc := usecase.New(repo, registry)
+
+	put := func(ws, title, kindID string, fields map[string]model.FieldValue) model.KnowledgeID {
+		t.Helper()
+		now := time.Now().UTC()
+		k := &model.Knowledge{
+			ID:          model.NewKnowledgeID(),
+			WorkspaceID: ws,
+			Title:       title,
+			TagIDs:      []model.TagID{model.NewTagID()},
+			KindID:      kindID,
+			FieldValues: fields,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		_, err := repo.Knowledge().Create(ctx, ws, k)
+		gt.NoError(t, err).Required()
+		return k.ID
+	}
+
+	// Clean: a legacy entry (empty kind → default_kind), an explicit default,
+	// a valid glossary entry, and a glossary entry missing its required field
+	// (required is enforced on write, not reported here).
+	put(configuredWS, "legacy", "", nil)
+	put(configuredWS, "note", "note", nil)
+	put(configuredWS, "valid glossary", "glossary", map[string]model.FieldValue{
+		"scope": {FieldID: "scope", Type: types.FieldTypeSelect, Value: "team"},
+	})
+	put(configuredWS, "glossary without scope", "glossary", nil)
+	// A value under a field definition that no longer exists is not reported.
+	put(configuredWS, "orphan value", "glossary", map[string]model.FieldValue{
+		"removed_field": {FieldID: "removed_field", Type: types.FieldTypeText, Value: "x"},
+	})
+	// The implicit kind accepts a legacy entry and leaves orphan values alone.
+	put(implicitWS, "implicit legacy", "", map[string]model.FieldValue{
+		"removed_field": {FieldID: "removed_field", Type: types.FieldTypeText, Value: "x"},
+	})
+
+	// Reported.
+	badOption := put(configuredWS, "bad option", "glossary", map[string]model.FieldValue{
+		"scope": {FieldID: "scope", Type: types.FieldTypeSelect, Value: "org"},
+	})
+	removedKind := put(configuredWS, "removed kind", "runbook", nil)
+	// An entry that names a kind in a workspace whose [knowledge] was removed.
+	strandedKind := put(implicitWS, "stranded kind", "glossary", nil)
+
+	result, err := uc.ValidateDB(ctx)
+	gt.NoError(t, err).Required()
+	gt.Array(t, result.Issues).Length(3).Required()
+
+	// Issues are ordered by workspace id, then kind, then field id.
+	stranded := result.Issues[0]
+	gt.Value(t, stranded.WorkspaceID).Equal(implicitWS)
+	gt.Value(t, stranded.Kind).Equal(usecase.IssueKindKnowledgeKind)
+	gt.Value(t, stranded.FieldID).Equal("")
+	gt.Value(t, stranded.Count).Equal(int64(1))
+	gt.Value(t, stranded.Sample.KnowledgeID).Equal(strandedKind)
+	gt.Value(t, stranded.Actual).Equal("glossary")
+
+	optionIssue := result.Issues[1]
+	gt.Value(t, optionIssue.WorkspaceID).Equal(configuredWS)
+	gt.Value(t, optionIssue.Kind).Equal(usecase.IssueKindFieldValue)
+	gt.Value(t, optionIssue.FieldID).Equal("scope")
+	gt.Value(t, optionIssue.Count).Equal(int64(1))
+	gt.Value(t, optionIssue.Sample.Kind).Equal(usecase.TargetKindKnowledge)
+	gt.Value(t, optionIssue.Sample.KnowledgeID).Equal(badOption)
+	gt.Value(t, optionIssue.Sample.CaseID).Equal(int64(0))
+	gt.Value(t, optionIssue.Expected).Equal("select")
+	gt.Value(t, optionIssue.Actual).Equal("org")
+	gt.String(t, optionIssue.Sample.String()).Equal("knowledge:" + string(badOption))
+
+	removed := result.Issues[2]
+	gt.Value(t, removed.WorkspaceID).Equal(configuredWS)
+	gt.Value(t, removed.Kind).Equal(usecase.IssueKindKnowledgeKind)
+	gt.Value(t, removed.FieldID).Equal("")
+	gt.Value(t, removed.Count).Equal(int64(1))
+	gt.Value(t, removed.Sample.KnowledgeID).Equal(removedKind)
+	gt.Value(t, removed.Expected).Equal("one of the configured knowledge kind ids")
+	gt.Value(t, removed.Actual).Equal("runbook")
+}
