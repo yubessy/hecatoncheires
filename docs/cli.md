@@ -435,24 +435,27 @@ document has no directory of its own — so over HTTP only the shape of
 
 The DB consistency check answers one question: has a configuration change left
 existing data inconsistent with the configuration now in force? It reads every
-Case, Action and Memo of every registered workspace and reports the mismatches.
+Case, Action, Memo and Knowledge entry of every registered workspace and reports
+the mismatches.
 **It never writes** — repairing data is the job of `diagnosis` subcommands.
 
 | Reported as | Applies to | Detects |
 |-------------|-----------|---------|
-| `field_value` | Case and Memo field values | A stored value that violates its declared type: a `select` / `multi-select` option id the definition no longer lists, a `date` that is not RFC3339, a `number` holding a string, a `case_ref` that is not a numeric id, a `text` value that does not fit the field's `semantic` (e.g. a channel name in a `slack_channel_id` field; `expected` is then `text (<semantic>)`), a `text` value that does not match the field's `validation.pattern` (`expected` is then `text (pattern=<pattern>)`, or `text (<semantic>, pattern=<pattern>)` when the field also has a semantic), and the equivalent for every other field type |
-| `field_type_mismatch` | Case and Memo field values | A stored value whose recorded type no longer matches the schema. This catches a type change whose values still happen to fit — `text` → `markdown` are both strings — which `field_value` alone cannot see. Values written before the type was recorded (empty type) are not comparable and are skipped |
+| `field_value` | Case, Memo and Knowledge field values | A stored value that violates its declared type: a `select` / `multi-select` option id the definition no longer lists, a `date` that is not RFC3339, a `number` holding a string, a `case_ref` that is not a numeric id, a `text` value that does not fit the field's `semantic` (e.g. a channel name in a `slack_channel_id` field; `expected` is then `text (<semantic>)`), a `text` value that does not match the field's `validation.pattern` (`expected` is then `text (pattern=<pattern>)`, or `text (<semantic>, pattern=<pattern>)` when the field also has a semantic), and the equivalent for every other field type |
+| `field_type_mismatch` | Case, Memo and Knowledge field values | A stored value whose recorded type no longer matches the schema. This catches a type change whose values still happen to fit — `text` → `markdown` are both strings — which `field_value` alone cannot see. Values written before the type was recorded (empty type) are not comparable and are skipped |
 | `case_ref_missing` | Case field values | A `case_ref` / `multi_case_ref` value pointing at a Case that does not exist in the field's configured `reference_workspace`. This is what surfaces after `reference_workspace` is repointed |
 | `board_status_invalid` | thread-mode Cases | A `BoardStatus` that is empty or is not one of the `[[case.status]]` ids. Such a Case appears in no Kanban column |
 | `lifecycle_status_mismatch` | thread-mode Cases | A Case whose lifecycle status (`OPEN` / `CLOSED`) disagrees with whether its `BoardStatus` is listed under `[case] closed`. This is what surfaces after a status is added to or removed from `closed` |
 | `action_status_invalid` | Actions | A `Status` that is not one of the `[[action.status]]` ids. Archived Actions are included, because they stay visible in the Case history |
 | `action_actions_disabled` | Actions of a thread-mode workspace | An Action stored in a thread-mode workspace whose `[case] actions` is off (the default). This is what surfaces after the option is turned off while Actions exist: the case detail page then shows no Related Actions section and the thread-mode board lists Cases, so such an Action is visible nowhere in the UI. Archived Actions are included. Setting `[case] actions = true` again clears it |
+| `knowledge_kind_invalid` | Knowledge entries | An entry whose stored kind is not one of the `[[knowledge.kinds]]` ids: the kind was removed or renamed, or `[knowledge]` was removed while entries of a configured kind exist. The same reasoning as `board_status_invalid` — the entry keeps pointing at a category that no longer exists, and its fields can no longer be edited. An entry that stores no kind always resolves to `default_kind` (or, without `[knowledge]`, to the implicit kind) and is never reported. Field values of a reported entry are not checked, since there is no schema to check them against |
 | `archived_case_not_closed` | all Cases | An archived Case whose lifecycle status is not `CLOSED`. Every write path enforces the invariant (archiving refuses a non-closed Case; reopen and board-status changes refuse an archived one), so a finding means the document came from somewhere else — a data import, a manual edit, or a lost race between archive and reopen. It matters because such a Case is filtered out of the Cases list, the board, the dashboard and the Job scan at once, and cannot be found without this check. Unlike the two rows above it is not gated on `CaseMode`: the invariant holds in channel mode too |
 
 Each row of output is one **group**, not one entity: a configuration change
 affects a whole workspace uniformly, so occurrences sharing the same check and
 field id collapse into a single line carrying `count` (how many entities) and
-`sample` (the lowest-id entity, e.g. `case:42` / `action:42/7` / `memo:42/<id>`).
+`sample` (the lowest-id entity, e.g. `case:42` / `action:42/7` / `memo:42/<id>` /
+`knowledge:<id>`).
 `expected`, `actual` and `message` describe that sample only.
 
 ### What `--check-db` deliberately does NOT check

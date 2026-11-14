@@ -101,13 +101,16 @@ type dbCheckIssue struct {
 	Message     string        `json:"message"`
 }
 
-// dbCheckTarget identifies the sampled entity. ActionID / MemoID are omitted for
-// the kinds they do not apply to.
+// dbCheckTarget identifies the sampled entity. ActionID / MemoID / KnowledgeID
+// are omitted for the kinds they do not apply to, and CaseID is omitted for a
+// knowledge target, the one kind that is not Case-scoped (Case ids start at 1,
+// so no Case-scoped target loses it).
 type dbCheckTarget struct {
-	Kind     string `json:"kind"`
-	CaseID   int64  `json:"case_id"`
-	ActionID int64  `json:"action_id,omitempty"`
-	MemoID   string `json:"memo_id,omitempty"`
+	Kind        string `json:"kind"`
+	CaseID      int64  `json:"case_id,omitempty"`
+	ActionID    int64  `json:"action_id,omitempty"`
+	MemoID      string `json:"memo_id,omitempty"`
+	KnowledgeID string `json:"knowledge_id,omitempty"`
 }
 
 // ServeHTTP implements http.Handler.
@@ -163,10 +166,11 @@ func (h *DBCheckHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			FieldID:     issue.FieldID,
 			Count:       issue.Count,
 			Sample: dbCheckTarget{
-				Kind:     string(issue.Sample.Kind),
-				CaseID:   issue.Sample.CaseID,
-				ActionID: issue.Sample.ActionID,
-				MemoID:   string(issue.Sample.MemoID),
+				Kind:        string(issue.Sample.Kind),
+				CaseID:      issue.Sample.CaseID,
+				ActionID:    issue.Sample.ActionID,
+				MemoID:      string(issue.Sample.MemoID),
+				KnowledgeID: string(issue.Sample.KnowledgeID),
 			},
 			Expected: issue.Expected,
 			Actual:   issue.Actual,

@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 
@@ -29,26 +31,15 @@ func (r *knowledgeRepository) ensureWorkspace(workspaceID string) {
 }
 
 // copyKnowledge creates a full deep copy so mutations by the caller after
-// Create/Update cannot silently alter the stored value.
+// Create/Update cannot silently alter the stored value. It starts from a whole
+// struct copy so a field added to model.Knowledge is carried without anyone
+// remembering to list it here, then detaches the reference-typed fields.
 func copyKnowledge(k *model.Knowledge) *model.Knowledge {
-	copied := &model.Knowledge{
-		ID:          k.ID,
-		WorkspaceID: k.WorkspaceID,
-		Title:       k.Title,
-		Claim:       k.Claim,
-		CreatorID:   k.CreatorID,
-		CreatedAt:   k.CreatedAt,
-		UpdatedAt:   k.UpdatedAt,
-	}
-	if k.TagIDs != nil {
-		copied.TagIDs = make([]model.TagID, len(k.TagIDs))
-		copy(copied.TagIDs, k.TagIDs)
-	}
-	if k.Embedding != nil {
-		copied.Embedding = make([]float64, len(k.Embedding))
-		copy(copied.Embedding, k.Embedding)
-	}
-	return copied
+	copied := *k
+	copied.TagIDs = slices.Clone(k.TagIDs)
+	copied.Embedding = slices.Clone(k.Embedding)
+	copied.FieldValues = maps.Clone(k.FieldValues)
+	return &copied
 }
 
 // knowledgeHasAllTags reports whether k references every tag id in want (AND).

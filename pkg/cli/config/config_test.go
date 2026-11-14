@@ -3349,3 +3349,261 @@ reference_workspace = "risk"
 	gt.Value(t, err).NotNil()
 	gt.Error(t, err).Is(config.ErrUnexpectedReferenceWorkspace)
 }
+
+func TestLoadWorkspaceConfigs_Knowledge(t *testing.T) {
+	load := func(t *testing.T, body string) ([]*config.WorkspaceConfig, error) {
+		t.Helper()
+		configPath := filepath.Join(t.TempDir(), "kb.toml")
+		content := `
+[workspace]
+id = "kb"
+name = "Knowledge Base"
+` + body
+		gt.NoError(t, os.WriteFile(configPath, []byte(content), 0644)).Required()
+		return config.LoadWorkspaceConfigs([]string{configPath})
+	}
+
+	t.Run("parses kinds with their fields and reaches the registry", func(t *testing.T) {
+		configs, err := load(t, `
+[knowledge]
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+description = "General operating knowledge."
+
+[[knowledge.kinds]]
+id = "glossary"
+name = "Glossary"
+description = "Definitions of internal terms."
+
+[[knowledge.kinds.fields]]
+id = "aliases"
+name = "Aliases"
+type = "text"
+required = true
+
+[[knowledge.kinds.fields]]
+id = "scope"
+name = "Scope"
+type = "select"
+options = [
+  { id = "team", name = "Team" },
+  { id = "org", name = "Organization" },
+]
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+
+		kc := configs[0].KnowledgeConfig
+		gt.Value(t, kc).NotNil().Required()
+		gt.Bool(t, kc.Configured()).True()
+		gt.String(t, kc.DefaultKindID).Equal("note")
+		gt.Array(t, kc.Kinds).Length(2).Required()
+
+		gt.String(t, kc.Kinds[0].ID).Equal("note")
+		gt.String(t, kc.Kinds[0].Name).Equal("Note")
+		gt.String(t, kc.Kinds[0].Description).Equal("General operating knowledge.")
+		gt.Value(t, kc.Kinds[0].FieldSchema).NotNil().Required()
+		gt.Array(t, kc.Kinds[0].FieldSchema.Fields).Length(0)
+
+		gt.String(t, kc.Kinds[1].ID).Equal("glossary")
+		gt.String(t, kc.Kinds[1].Name).Equal("Glossary")
+		gt.String(t, kc.Kinds[1].Description).Equal("Definitions of internal terms.")
+		fields := kc.Kinds[1].FieldSchema.Fields
+		gt.Array(t, fields).Length(2).Required()
+		gt.String(t, fields[0].ID).Equal("aliases")
+		gt.Value(t, fields[0].Type).Equal(types.FieldTypeText)
+		gt.Bool(t, fields[0].Required).True()
+		gt.String(t, fields[1].ID).Equal("scope")
+		gt.Value(t, fields[1].Type).Equal(types.FieldTypeSelect)
+		gt.Array(t, fields[1].Options).Length(2)
+
+		registry := config.BuildWorkspaceRegistry(configs)
+		entry, err := registry.Get("kb")
+		gt.NoError(t, err).Required()
+		gt.Value(t, entry.KnowledgeConfig).Equal(kc)
+	})
+
+	t.Run("knowledge omitted leaves config nil, meaning the implicit kind", func(t *testing.T) {
+		configs, err := load(t, "")
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].KnowledgeConfig).Nil()
+
+		registry := config.BuildWorkspaceRegistry(configs)
+		entry, err := registry.Get("kb")
+		gt.NoError(t, err).Required()
+		gt.Value(t, entry.KnowledgeConfig).Nil()
+	})
+
+	errorCases := []struct {
+		name string
+		body string
+		want error
+	}{
+		{
+			name: "no kinds",
+			body: `
+[knowledge]
+default_kind = "note"
+`,
+			want: config.ErrMissingKnowledgeKinds,
+		},
+		{
+			name: "invalid kind id",
+			body: `
+[knowledge]
+default_kind = "Note"
+
+[[knowledge.kinds]]
+id = "Note"
+name = "Note"
+`,
+			want: config.ErrInvalidKnowledgeKindID,
+		},
+		{
+			name: "duplicate kind id",
+			body: `
+[knowledge]
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Another note"
+`,
+			want: config.ErrDuplicateKnowledgeKindID,
+		},
+		{
+			name: "kind without name",
+			body: `
+[knowledge]
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+`,
+			want: config.ErrMissingName,
+		},
+		{
+			name: "missing default_kind",
+			body: `
+[knowledge]
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+`,
+			want: config.ErrInvalidDefaultKnowledgeKind,
+		},
+		{
+			name: "default_kind names no kind",
+			body: `
+[knowledge]
+default_kind = "glossary"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+`,
+			want: config.ErrInvalidDefaultKnowledgeKind,
+		},
+		{
+			name: "invalid field type",
+			body: `
+[knowledge]
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+
+[[knowledge.kinds.fields]]
+id = "body"
+name = "Body"
+type = "nonsense"
+`,
+			want: config.ErrInvalidFieldType,
+		},
+		{
+			name: "duplicate field id within a kind",
+			body: `
+[knowledge]
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+
+[[knowledge.kinds.fields]]
+id = "body"
+name = "Body"
+type = "text"
+
+[[knowledge.kinds.fields]]
+id = "body"
+name = "Body again"
+type = "text"
+`,
+			want: config.ErrDuplicateFieldID,
+		},
+		{
+			name: "case_ref field",
+			body: `
+[knowledge]
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+
+[[knowledge.kinds.fields]]
+id = "linked"
+name = "Linked Case"
+type = "case_ref"
+reference_workspace = "kb"
+`,
+			want: config.ErrUnexpectedReferenceWorkspace,
+		},
+	}
+	for _, tc := range errorCases {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			_, err := load(t, tc.body)
+			gt.Error(t, err).Is(tc.want)
+		})
+	}
+
+	t.Run("the same field id may appear in two kinds", func(t *testing.T) {
+		configs, err := load(t, `
+[knowledge]
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+
+[[knowledge.kinds.fields]]
+id = "owner"
+name = "Owner"
+type = "text"
+
+[[knowledge.kinds]]
+id = "runbook"
+name = "Runbook"
+
+[[knowledge.kinds.fields]]
+id = "owner"
+name = "Owner"
+type = "user"
+`)
+		gt.NoError(t, err).Required()
+		kc := configs[0].KnowledgeConfig
+		gt.Value(t, kc.Kinds[0].FieldSchema.Fields[0].Type).Equal(types.FieldTypeText)
+		gt.Value(t, kc.Kinds[1].FieldSchema.Fields[0].Type).Equal(types.FieldTypeUser)
+	})
+}

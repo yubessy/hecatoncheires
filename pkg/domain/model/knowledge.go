@@ -45,7 +45,8 @@ const (
 // information that does not exist in the LLM's general knowledge (operating
 // rules, internal proper nouns, past judgements, threat intel, ...) accumulated
 // so it can be reused on future case processing. Unlike Memo it is NOT scoped to
-// a case and carries no custom fields — only a Markdown claim body and tags.
+// a case. Every entry has a Markdown claim body and tags; beyond those it
+// belongs to one workspace-defined kind and carries that kind's custom fields.
 //
 // All identifiers are flat top-level fields even though the Firestore path
 // already encodes WorkspaceID, mirroring the Memo convention so a document
@@ -64,6 +65,16 @@ type Knowledge struct {
 	// ID exists in the workspace before persistence. The slice is de-duplicated
 	// (order preserved) by the usecase.
 	TagIDs []TagID
+	// KindID is the workspace-defined knowledge kind the entry belongs to. An
+	// empty KindID means "the workspace's default kind": every entry written
+	// before the workspace defined kinds has one, and a workspace without a
+	// [knowledge] section keeps writing them (config.KnowledgeConfig.StoredKindID).
+	// The usecase resolves it; the repository stores it verbatim.
+	KindID string
+	// FieldValues holds the kind's custom field values keyed by field id, using
+	// the same representation as Case and Memo (model.FieldValue, validated by
+	// the shared FieldValidator against the kind's field schema).
+	FieldValues map[string]FieldValue
 	// Embedding is the vector embedding of Title + Claim used for in-memory
 	// cosine semantic search. It is empty when no embedding client is configured
 	// (fail-open). It is never exposed through the GraphQL surface.
