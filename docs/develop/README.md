@@ -25,6 +25,9 @@ rule (`.claude/rules/`). If it is background an agent should always carry, it is
 - [Architecture (internals)](architecture.md) — the "why/how" of internal
   design: GraphQL DataLoader (request-scoped batching) and the Agent thread
   session implementation (Cloud Storage layout, IAM, state persistence).
+- [Knowledge kinds and custom fields](knowledge-kinds.md) — how a workspace
+  defines several kinds of Knowledge with their own fields, and how stored
+  entries stay valid when it does.
 
 ## See Also
 
