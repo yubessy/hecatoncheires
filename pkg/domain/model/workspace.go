@@ -30,9 +30,13 @@ var ErrWorkspaceAccessDenied = goerr.New("workspace access denied")
 
 // WorkspaceEntry holds workspace identity and its field schema
 type WorkspaceEntry struct {
-	Workspace            Workspace
-	FieldSchema          *config.FieldSchema
-	MemoConfig           *config.MemoConfig // Memo "strong definition" + custom field schema (nil/empty when memos disabled)
+	Workspace   Workspace
+	FieldSchema *config.FieldSchema
+	MemoConfig  *config.MemoConfig // Memo "strong definition" + custom field schema (nil/empty when memos disabled)
+	// KnowledgeConfig is the workspace's [knowledge] kinds. Nil means the
+	// section is absent and the workspace has the single implicit kind; every
+	// KnowledgeConfig method is nil-safe and answers for it.
+	KnowledgeConfig      *config.KnowledgeConfig
 	ActionStatusSet      *ActionStatusSet
 	SlackChannelPrefix   string
 	SlackTeamID          string // Slack Team ID for org-level app support (empty for WS-level apps)

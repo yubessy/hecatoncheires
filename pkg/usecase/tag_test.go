@@ -141,7 +141,7 @@ func TestTagUseCase_DeleteTagInUseReturnsErrTagInUse(t *testing.T) {
 	ctx := context.Background()
 	repo := memory.New()
 	tagUC := usecase.NewTagUseCase(repo)
-	knowledgeUC := usecase.NewKnowledgeUseCase(repo, nil)
+	knowledgeUC := usecase.NewKnowledgeUseCase(repo, nil, nil)
 	ws := newWS()
 
 	// Create a tag and a knowledge entry that references it.

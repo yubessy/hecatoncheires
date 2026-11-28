@@ -47,6 +47,8 @@ type dbCheckBody struct {
 			CaseID   int64  `json:"case_id"`
 			ActionID int64  `json:"action_id"`
 			MemoID   string `json:"memo_id"`
+			// KnowledgeID is set only for a knowledge target.
+			KnowledgeID string `json:"knowledge_id"`
 		} `json:"sample"`
 		Expected string `json:"expected"`
 		Actual   string `json:"actual"`
@@ -166,6 +168,18 @@ func TestDBCheckHandler_ReportsIssues(t *testing.T) {
 				Actual:   "OBSOLETE",
 				Message:  "action status is not defined in the workspace configuration",
 			},
+			{
+				WorkspaceID: "task",
+				Kind:        usecase.IssueKindKnowledgeKind,
+				Count:       2,
+				Sample: usecase.ValidationTarget{
+					Kind:        usecase.TargetKindKnowledge,
+					KnowledgeID: model.KnowledgeID("knowledge-1"),
+				},
+				Expected: "one of the configured knowledge kind ids",
+				Actual:   "runbook",
+				Message:  "knowledge kind is not defined in the workspace configuration",
+			},
 		},
 	}}
 
@@ -175,8 +189,8 @@ func TestDBCheckHandler_ReportsIssues(t *testing.T) {
 	var got dbCheckBody
 	gt.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got)).Required()
 	gt.Bool(t, got.HasIssues).True()
-	gt.Number(t, got.TotalCount).Equal(int64(11))
-	gt.Array(t, got.Issues).Length(3).Required()
+	gt.Number(t, got.TotalCount).Equal(int64(13))
+	gt.Array(t, got.Issues).Length(4).Required()
 
 	gt.String(t, got.Issues[0].WorkspaceID).Equal("risk")
 	gt.String(t, got.Issues[0].Kind).Equal("board_status_invalid")
@@ -205,6 +219,26 @@ func TestDBCheckHandler_ReportsIssues(t *testing.T) {
 	gt.Number(t, got.Issues[2].Sample.CaseID).Equal(int64(3))
 	gt.Number(t, got.Issues[2].Sample.ActionID).Equal(int64(11))
 	gt.String(t, got.Issues[2].Actual).Equal("OBSOLETE")
+	gt.String(t, got.Issues[2].Sample.KnowledgeID).Equal("")
+
+	gt.String(t, got.Issues[3].Kind).Equal("knowledge_kind_invalid")
+	gt.String(t, got.Issues[3].Sample.Kind).Equal("knowledge")
+	gt.String(t, got.Issues[3].Sample.KnowledgeID).Equal("knowledge-1")
+	gt.String(t, got.Issues[3].Actual).Equal("runbook")
+
+	// Knowledge is not Case-scoped, so its sample carries no case_id at all
+	// rather than a misleading zero.
+	var raw struct {
+		Issues []struct {
+			Sample map[string]any `json:"sample"`
+		} `json:"issues"`
+	}
+	gt.NoError(t, json.Unmarshal(rec.Body.Bytes(), &raw)).Required()
+	gt.Array(t, raw.Issues).Length(4).Required()
+	_, hasCaseID := raw.Issues[3].Sample["case_id"]
+	gt.Bool(t, hasCaseID).False()
+	_, hasCaseID = raw.Issues[0].Sample["case_id"]
+	gt.Bool(t, hasCaseID).True()
 }
 
 func TestDBCheckHandler_EmptyBodyIsRejected(t *testing.T) {

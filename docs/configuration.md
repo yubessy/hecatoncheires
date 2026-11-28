@@ -742,6 +742,89 @@ description = "Link to the primary source (log, dashboard, PR)."
 
 ---
 
+## Knowledge Section
+
+Every Knowledge entry has a title, a Markdown claim and one or more tags. The
+optional `[knowledge]` section lets a workspace define several **kinds** of
+Knowledge, each with its own custom fields, using the exact same field schema as
+case `[[fields]]` (same types, options and validation rules).
+
+When `[knowledge]` is omitted the workspace has a single implicit kind with the
+id `default` and no custom fields — Knowledge as it was before kinds existed.
+
+```toml
+[knowledge]
+# The kind an entry belongs to when it records none: every entry written before
+# the workspace defined kinds, and a new entry that names no kind.
+default_kind = "note"
+
+[[knowledge.kinds]]
+id = "note"
+name = "Note"
+description = "General operating knowledge."
+
+[[knowledge.kinds]]
+id = "glossary"
+name = "Glossary"
+description = "Definitions of internal terms."
+
+# Fields of the "glossary" kind. Identical schema to [[fields]].
+[[knowledge.kinds.fields]]
+id = "aliases"
+name = "Aliases"
+type = "text"
+required = true
+
+[[knowledge.kinds.fields]]
+id = "scope"
+name = "Scope"
+type = "select"
+options = [
+  { id = "team", name = "Team" },
+  { id = "org", name = "Organization" },
+]
+```
+
+A `[[knowledge.kinds.fields]]` table belongs to the `[[knowledge.kinds]]` entry
+written above it.
+
+### Properties
+
+| Property | Description |
+|----------|-------------|
+| `default_kind` | Required. The id of one of the kinds below. |
+| `[[knowledge.kinds]]` `id` | Required, unique in the workspace, same format as a field id (`^[a-z][a-z0-9_]*$`). Stored on every entry of the kind, so treat it as permanent. |
+| `[[knowledge.kinds]]` `name` | Required. Display name. |
+| `[[knowledge.kinds]]` `description` | Optional. What entries of this kind record. |
+| `[[knowledge.kinds.fields]]` | The kind's custom field definitions. Same schema and validation as `[[fields]]`; field ids are unique within a kind and may repeat across kinds. `case_ref` / `multi_case_ref` are not supported, as in `[memo]`. |
+
+### Behavior
+
+- **Adding `[knowledge]` to an existing workspace needs no data migration.** An
+  entry written while the workspace had no `[knowledge]` section stores no kind,
+  and an entry with no kind belongs to `default_kind`. Changing `default_kind`
+  later moves those entries, and only those: an entry created while kinds were
+  configured stores its kind explicitly.
+- **Writes are validated against the entry's kind.** A new entry's field values
+  must satisfy the kind's schema in full (required fields enforced, unknown
+  field ids rejected). An edit that sends field values is validated against the
+  entry's kind and merged over the stored values; an edit that sends none (a
+  title or claim change) runs no field validation, so an entry written before a
+  field became required stays editable.
+- **An entry's kind cannot be changed** after it is created.
+- **Removing or renaming a kind** leaves its entries pointing at a kind that no
+  longer exists. Their title, claim and tags can still be edited; their fields
+  cannot. `hecatoncheires validate --check-db` reports them as
+  `knowledge_kind_invalid` ([cli.md](cli.md#what---check-db-checks)).
+- **Where kinds are visible**: kinds are currently enforced by the Knowledge
+  write path and checked by `validate --check-db`. The GraphQL API, the Web UI
+  and the agent tools do not expose kinds or fields yet, so every entry they
+  create belongs to `default_kind` — which is why a kind that has a `required`
+  field should not be `default_kind` until they do. The staged plan is in
+  [docs/develop/knowledge-kinds.md](develop/knowledge-kinds.md).
+
+---
+
 ## Slack Section
 
 The `[slack]` section customizes Slack integration settings. This section is optional.

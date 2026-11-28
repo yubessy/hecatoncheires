@@ -52,6 +52,12 @@ const (
 	// created. The Web UI then shows no Related Actions section and the thread-
 	// mode board lists Cases, so the Action is visible nowhere in the UI.
 	IssueKindActionsDisabled ValidationIssueKind = "action_actions_disabled"
+	// IssueKindKnowledgeKind is a Knowledge entry whose stored, non-empty
+	// KindID names no kind the workspace configures: the kind was removed or
+	// renamed, or [knowledge] was removed altogether. An empty KindID always
+	// resolves (to default_kind, or to the implicit kind) and is never
+	// reported.
+	IssueKindKnowledgeKind ValidationIssueKind = "knowledge_kind_invalid"
 )
 
 // ValidationTargetKind names the kind of entity an issue was found on.
@@ -61,24 +67,31 @@ const (
 	TargetKindCase   ValidationTargetKind = "case"
 	TargetKindAction ValidationTargetKind = "action"
 	TargetKindMemo   ValidationTargetKind = "memo"
+	// TargetKindKnowledge is a workspace-wide Knowledge entry. It is the one
+	// target that is not Case-scoped, so its CaseID is zero.
+	TargetKindKnowledge ValidationTargetKind = "knowledge"
 )
 
-// ValidationTarget identifies one persisted entity. CaseID is always set:
-// Actions and Memos are both Case-scoped.
+// ValidationTarget identifies one persisted entity. CaseID is set for every
+// Case-scoped kind (Case, Action, Memo) and zero for Knowledge.
 type ValidationTarget struct {
-	Kind     ValidationTargetKind
-	CaseID   int64
-	ActionID int64        // set only when Kind is TargetKindAction
-	MemoID   model.MemoID // set only when Kind is TargetKindMemo
+	Kind        ValidationTargetKind
+	CaseID      int64
+	ActionID    int64             // set only when Kind is TargetKindAction
+	MemoID      model.MemoID      // set only when Kind is TargetKindMemo
+	KnowledgeID model.KnowledgeID // set only when Kind is TargetKindKnowledge
 }
 
-// String renders the target for log output, e.g. "case:42" or "memo:42/01H...".
+// String renders the target for log output, e.g. "case:42", "memo:42/01H..."
+// or "knowledge:01H...".
 func (t ValidationTarget) String() string {
 	switch t.Kind {
 	case TargetKindAction:
 		return fmt.Sprintf("action:%d/%d", t.CaseID, t.ActionID)
 	case TargetKindMemo:
 		return fmt.Sprintf("memo:%d/%s", t.CaseID, t.MemoID)
+	case TargetKindKnowledge:
+		return fmt.Sprintf("knowledge:%s", t.KnowledgeID)
 	default:
 		return fmt.Sprintf("case:%d", t.CaseID)
 	}
@@ -102,7 +115,10 @@ func (t ValidationTarget) compare(other ValidationTarget) int {
 		}
 		return 1
 	}
-	return strings.Compare(string(t.MemoID), string(other.MemoID))
+	if c := strings.Compare(string(t.MemoID), string(other.MemoID)); c != 0 {
+		return c
+	}
+	return strings.Compare(string(t.KnowledgeID), string(other.KnowledgeID))
 }
 
 // ValidationIssue is one GROUP of identical inconsistencies within a single
@@ -213,7 +229,7 @@ func compareIssues(a, b ValidationIssue) int {
 	return strings.Compare(a.FieldID, b.FieldID)
 }
 
-// ValidateDB checks the persisted Cases, Actions and Memos of every workspace
+// ValidateDB checks the persisted Cases, Actions, Memos and Knowledge of every workspace
 // registered with this process against that workspace's configuration and
 // reports the mismatches. It reads only; nothing is repaired or rewritten.
 //
@@ -265,6 +281,9 @@ func (uc *UseCases) validateWorkspaceData(ctx context.Context, entry *model.Work
 		return nil, err
 	}
 	if err := uc.validateMemoFields(ctx, entry, caseIDs, acc); err != nil {
+		return nil, err
+	}
+	if err := uc.validateKnowledge(ctx, entry, acc); err != nil {
 		return nil, err
 	}
 
@@ -632,6 +651,50 @@ func (uc *UseCases) validateMemoFields(ctx context.Context, entry *model.Workspa
 			target := ValidationTarget{Kind: TargetKindMemo, CaseID: m.CaseID, MemoID: m.ID}
 			addFieldViolations(acc, target, defByID, m.FieldValues, validator.ValidateStored(m.FieldValues))
 		}
+	}
+
+	return nil
+}
+
+// validateKnowledge checks every Knowledge entry of the workspace: that its
+// stored kind still exists, and that its field values fit that kind's schema.
+// Knowledge is a single workspace-wide collection, so one List covers it.
+func (uc *UseCases) validateKnowledge(ctx context.Context, entry *model.WorkspaceEntry, acc *issueAccumulator) error {
+	wsID := entry.Workspace.ID
+	cfg := entry.KnowledgeConfig
+
+	type kindCheck struct {
+		validator *model.FieldValidator
+		defByID   map[string]config.FieldDefinition
+	}
+	checks := make(map[string]kindCheck)
+	for _, kind := range cfg.EffectiveKinds() {
+		defByID := make(map[string]config.FieldDefinition, len(kind.FieldSchema.Fields))
+		for _, fd := range kind.FieldSchema.Fields {
+			defByID[fd.ID] = fd
+		}
+		checks[kind.ID] = kindCheck{
+			validator: model.NewFieldValidator(kind.FieldSchema),
+			defByID:   defByID,
+		}
+	}
+
+	items, err := uc.repo.Knowledge().List(ctx, wsID, interfaces.KnowledgeListOptions{})
+	if err != nil {
+		return goerr.Wrap(err, "failed to list knowledge for consistency check",
+			goerr.V("workspace_id", wsID))
+	}
+
+	for _, k := range items {
+		target := ValidationTarget{Kind: TargetKindKnowledge, KnowledgeID: k.ID}
+		check, ok := checks[cfg.ResolveKindID(k.KindID)]
+		if !ok {
+			acc.add(IssueKindKnowledgeKind, "", target,
+				"one of the configured knowledge kind ids", k.KindID,
+				"knowledge kind is not defined in the workspace configuration")
+			continue
+		}
+		addFieldViolations(acc, target, check.defByID, k.FieldValues, check.validator.ValidateStored(k.FieldValues))
 	}
 
 	return nil

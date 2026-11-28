@@ -164,6 +164,18 @@ var (
 	// ErrInvalidBudget is returned when a configured budget is negative, or so
 	// small it rounds away to zero (which would read as "not set").
 	ErrInvalidBudget = goerr.New("invalid budget")
+	// ErrMissingKnowledgeKinds is returned when a [knowledge] section defines
+	// no [[knowledge.kinds]] entry.
+	ErrMissingKnowledgeKinds = goerr.New("[knowledge] requires at least one kind")
+	// ErrInvalidKnowledgeKindID is returned when a knowledge kind id does not
+	// match the field id format.
+	ErrInvalidKnowledgeKindID = goerr.New("invalid knowledge kind id format")
+	// ErrDuplicateKnowledgeKindID is returned when two [[knowledge.kinds]]
+	// entries share an id.
+	ErrDuplicateKnowledgeKindID = goerr.New("duplicate knowledge kind id")
+	// ErrInvalidDefaultKnowledgeKind is returned when [knowledge] default_kind
+	// is missing or names no configured kind.
+	ErrInvalidDefaultKnowledgeKind = goerr.New("invalid [knowledge] default_kind")
 	// ErrInvalidLLMModel is returned when an [[llm_model]] entry is malformed,
 	// e.g. it names no model.
 	ErrInvalidLLMModel = goerr.New("invalid [[llm_model]] entry")
@@ -213,4 +225,5 @@ const (
 	GroupMemberKey      = "group_member"
 	ExportDatasetKey    = "dataset"
 	LLMModelRefKey      = "llm_model"
+	KnowledgeKindIDKey  = "knowledge_kind_id"
 )

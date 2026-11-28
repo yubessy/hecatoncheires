@@ -96,14 +96,20 @@ precondition it can satisfy on its next turn:
   over the length limit, rejected before any write.
 - **`tag is in use`** — `knowledge__delete_tag` refused because a knowledge entry
   still references the tag.
+- **`unknown knowledge kind`** — the entry names a kind the workspace's
+  `[knowledge]` section does not define, or field values were sent for an entry
+  whose kind has since been removed from it.
+- **`knowledge field validation failed`** — the field values do not fit the
+  kind's schema (a missing required field, an option the field does not list,
+  an unknown field id).
 
 Every other failure on those paths stays reportable, including a repository
 failure raised while verifying the tags — that one is a broken backend, not a
 caller's input.
 
-These three are also reachable through the GraphQL knowledge and tag mutations,
-where the same reasoning applies: they are classified as client faults
-(`BAD_USER_INPUT` for the first two, `CONFLICT` for `tag is in use`), so the API
+These are also reachable through the GraphQL knowledge and tag mutations, where
+the same reasoning applies: they are classified as client faults
+(`CONFLICT` for `tag is in use`, `BAD_USER_INPUT` for the rest), so the API
 answers `400` / `409` and no issue is raised. An unclassified error there would
 be answered `500` — and, once tagged, raise no issue either, leaving a server
 fault the client was told about with no operator-facing record. So a sentinel
@@ -888,7 +894,9 @@ groups, never `null`:
 
 `kind` values and their meaning are the `Reported as` column of the
 [check catalog](./cli.md#what---check-db-checks). `sample` carries
-`action_id` only for `action` targets and `memo_id` only for `memo` targets.
+`action_id` only for `action` targets and `memo_id` only for `memo` targets. A
+`knowledge` target carries `knowledge_id` and no `case_id`, because Knowledge is
+not Case-scoped.
 For a `field_value` issue on a `text` field that sets `semantic`, `expected`
 names both, e.g. `text (slack_channel_id)`. When the field sets
 `validation.pattern`, `expected` also names the pattern, e.g.
