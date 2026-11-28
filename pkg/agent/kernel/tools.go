@@ -359,6 +359,8 @@ func buildToolSetDeps(d ToolDeps, sc Scope, entry *model.WorkspaceEntry, target 
 			CaseID:      sc.CaseID,
 			Schema:      entry.FieldSchema,
 			StatusSet:   entry.CaseStatusSet,
+
+			DueDateEnabled: entry.DueDateEnabled(),
 		}
 	}
 
@@ -370,6 +372,8 @@ func buildToolSetDeps(d ToolDeps, sc Scope, entry *model.WorkspaceEntry, target 
 			ActorID:     sc.ActorUserID,
 			CaseUC:      d.CaseMultiUC,
 			Schema:      entry.FieldSchema,
+
+			DueDateEnabled: entry.DueDateEnabled(),
 		}
 		if entry.IsThreadMode() {
 			// A thread-mode workspace manages no Actions. Handing over the board

@@ -23,7 +23,8 @@ This case belongs to a workspace that describes itself as follows. Follow the co
 - Title: {{ .Title }}
 - Description: {{ .Description }}
 - Assignees (Slack user IDs): {{ .Assignees }}
-{{ if .BoardStatus }}- Current status: {{ .BoardStatus }}
+{{ if .ShowsDueDate }}- Due date (YYYY-MM-DD): {{ .DueDate }}
+{{ end }}{{ if .BoardStatus }}- Current status: {{ .BoardStatus }}
 {{ end }}{{ if .FieldValues }}- Existing field values:
 {{ range .FieldValues }}  - {{ .ID }}: {{ .Value }}
 {{ end }}{{ end }}

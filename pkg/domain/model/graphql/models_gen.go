@@ -157,6 +157,7 @@ type CreateCaseInput struct {
 	IsPrivate              *bool              `json:"isPrivate,omitempty"`
 	IsTest                 *bool              `json:"isTest,omitempty"`
 	ExistingSlackChannelID *string            `json:"existingSlackChannelID,omitempty"`
+	DueDate                *time.Time         `json:"dueDate,omitempty"`
 }
 
 type CreateDraftInput struct {
@@ -166,6 +167,7 @@ type CreateDraftInput struct {
 	Fields      []*FieldValueInput `json:"fields,omitempty"`
 	IsPrivate   *bool              `json:"isPrivate,omitempty"`
 	IsTest      *bool              `json:"isTest,omitempty"`
+	DueDate     *time.Time         `json:"dueDate,omitempty"`
 }
 
 type CreateGitHubSourceInput struct {
@@ -229,6 +231,7 @@ type FieldConfiguration struct {
 	Labels                    *EntityLabels      `json:"labels"`
 	ActionConfig              *ActionConfig      `json:"actionConfig"`
 	AllowExistingSlackChannel bool               `json:"allowExistingSlackChannel"`
+	CaseDueDateEnabled        bool               `json:"caseDueDateEnabled"`
 }
 
 type FieldDefinition struct {
@@ -568,10 +571,12 @@ type Source struct {
 }
 
 type SubmitDraftInput struct {
-	Title       *string            `json:"title,omitempty"`
-	Description *string            `json:"description,omitempty"`
-	Fields      []*FieldValueInput `json:"fields,omitempty"`
-	IsTest      *bool              `json:"isTest,omitempty"`
+	Title        *string            `json:"title,omitempty"`
+	Description  *string            `json:"description,omitempty"`
+	Fields       []*FieldValueInput `json:"fields,omitempty"`
+	IsTest       *bool              `json:"isTest,omitempty"`
+	DueDate      *time.Time         `json:"dueDate,omitempty"`
+	ClearDueDate *bool              `json:"clearDueDate,omitempty"`
 }
 
 type Tag struct {
@@ -607,11 +612,13 @@ type UpdateCaseAgentSettingsInput struct {
 }
 
 type UpdateCaseInput struct {
-	ID          int                `json:"id"`
-	Title       *string            `json:"title,omitempty"`
-	Description *string            `json:"description,omitempty"`
-	Fields      []*FieldValueInput `json:"fields,omitempty"`
-	IsTest      *bool              `json:"isTest,omitempty"`
+	ID           int                `json:"id"`
+	Title        *string            `json:"title,omitempty"`
+	Description  *string            `json:"description,omitempty"`
+	Fields       []*FieldValueInput `json:"fields,omitempty"`
+	IsTest       *bool              `json:"isTest,omitempty"`
+	DueDate      *time.Time         `json:"dueDate,omitempty"`
+	ClearDueDate *bool              `json:"clearDueDate,omitempty"`
 }
 
 type UpdateCaseStatusInput struct {

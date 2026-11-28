@@ -81,7 +81,7 @@ dataset names must be unique.
 
 | Table | Source | Notes |
 |-------|--------|-------|
-| `cases` | non-draft Cases (archived included) | drafts excluded; `field_<id>` per workspace field; private cases excluded unless `include_private`; `archived_at` is null for an active Case |
+| `cases` | non-draft Cases (archived included) | drafts excluded; `field_<id>` per workspace field; private cases excluded unless `include_private`; `archived_at` is null for an active Case; `due_date` is the built-in due date ([`[case] due_date`](configuration.md#built-in-case-due-date-case-due_date)), null when unset |
 | `actions` | Actions (archived included) | only actions whose parent Case is exported |
 | `memos` | Memos (archived included) | `field_<id>` per workspace memo field; only memos of exported cases |
 | `job_runs` | Latest run state per (case, job) | only runs of exported cases |

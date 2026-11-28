@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/m-mizutani/gt"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
@@ -2551,5 +2552,214 @@ func TestSlackUseCases_WorkspaceAccess_Commands(t *testing.T) {
 		gt.NoError(t, err).Required()
 		gt.Array(t, actions).Length(0)
 		assertEphemeral(t, slackMock, "C-CASE")
+	})
+}
+
+// TestSlackUseCases_CaseDueDate covers the built-in case due date on the Slack
+// case modals: the picker is rendered only when [case] due_date is on, the
+// edit modal pre-selects the stored date, and both submits persist (or clear)
+// the chosen day.
+func TestSlackUseCases_CaseDueDate(t *testing.T) {
+	i18n.Init(i18n.LangEN)
+	ctx := context.Background()
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+
+	newRegistry := func(enabled bool) *model.WorkspaceRegistry {
+		registry := model.NewWorkspaceRegistry()
+		registry.Register(&model.WorkspaceEntry{
+			Workspace:   model.Workspace{ID: "risk", Name: "Risk Management"},
+			CaseDueDate: enabled,
+		})
+		return registry
+	}
+	hasBlock := func(view goslack.ModalViewRequest, blockID string) bool {
+		for _, b := range view.Blocks.BlockSet {
+			if ib, ok := b.(*goslack.InputBlock); ok && ib.BlockID == blockID {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("creation modal shows the picker only when enabled", func(t *testing.T) {
+		for _, enabled := range []bool{true, false} {
+			slackMock := &commandTestSlackService{}
+			uc := usecase.NewSlackUseCases(memory.New(), newRegistry(enabled), nil, nil, slackMock)
+			gt.NoError(t, uc.HandleSlashCommand(ctx, "trigger-1", "U001", "C001", "risk", "", "")).Required()
+			gt.Bool(t, slackMock.openViewCalled).True().Required()
+			gt.Value(t, hasBlock(slackMock.openViewRequest, usecase.SlackBlockIDCaseDueDate)).Equal(enabled)
+			if enabled {
+				block := findInputBlock(t, slackMock.openViewRequest, usecase.SlackBlockIDCaseDueDate)
+				gt.Bool(t, block.Optional).True()
+				picker, ok := block.Element.(*goslack.DatePickerBlockElement)
+				gt.Bool(t, ok).True().Required()
+				gt.Value(t, picker.ActionID).Equal(usecase.SlackActionIDCaseDueDate)
+				gt.Value(t, picker.InitialDate).Equal("")
+			}
+		}
+	})
+
+	t.Run("edit modal pre-selects the stored due date", func(t *testing.T) {
+		repo := memory.New()
+		created, err := repo.Case().Create(ctx, "risk", &model.Case{
+			ReporterID:     "U-REPORTER",
+			Title:          "Sample case 1",
+			SlackChannelID: "C-CASE-CHANNEL",
+			DueDate:        &due,
+		})
+		gt.NoError(t, err).Required()
+
+		slackMock := &commandTestSlackService{}
+		uc := usecase.NewSlackUseCases(repo, newRegistry(true), nil, nil, slackMock)
+		gt.NoError(t, uc.HandleSlashCommand(ctx, "trigger-1", "U001", "C-CASE-CHANNEL", "", "", "update")).Required()
+		gt.Value(t, slackMock.openViewRequest.CallbackID).Equal(usecase.SlackCallbackIDEditCase).Required()
+		block := findInputBlock(t, slackMock.openViewRequest, usecase.SlackBlockIDCaseDueDate)
+		picker, ok := block.Element.(*goslack.DatePickerBlockElement)
+		gt.Bool(t, ok).True().Required()
+		gt.Value(t, picker.InitialDate).Equal("2030-06-30")
+		gt.Value(t, created.ID).NotEqual(int64(0))
+	})
+
+	t.Run("creation submit stores the chosen day", func(t *testing.T) {
+		repo := memory.New()
+		registry := newRegistry(true)
+		slackMock := &commandTestSlackService{}
+		slackUC := usecase.NewSlackUseCases(repo, registry, nil, nil, slackMock)
+		caseUC := usecase.NewCaseUseCase(repo, registry, nil, nil, "")
+		seedSlackUsers(t, repo, "U001")
+
+		meta, _ := json.Marshal(map[string]string{"workspace_id": "risk", "channel_id": "C001"})
+		callback := &goslack.InteractionCallback{
+			User: goslack.User{ID: "U001"},
+			View: goslack.View{
+				PrivateMetadata: string(meta),
+				State: &goslack.ViewState{Values: map[string]map[string]goslack.BlockAction{
+					usecase.SlackBlockIDCaseTitle:   {usecase.SlackActionIDCaseTitle: {Value: "Sample case 2"}},
+					usecase.SlackBlockIDCaseDueDate: {usecase.SlackActionIDCaseDueDate: {SelectedDate: "2030-06-30"}},
+				}},
+			},
+		}
+		gt.NoError(t, slackUC.HandleCaseCreationSubmit(ctx, caseUC, callback)).Required()
+
+		cases, err := repo.Case().List(ctx, "risk")
+		gt.NoError(t, err).Required()
+		gt.Array(t, cases).Length(1).Required()
+		gt.Value(t, cases[0].Title).Equal("Sample case 2")
+		gt.Value(t, cases[0].DueDate).NotNil().Required()
+		gt.Bool(t, cases[0].DueDate.Equal(due)).True()
+	})
+
+	t.Run("draft-mode creation submit keeps the chosen day on the draft", func(t *testing.T) {
+		repo := memory.New()
+		registry := newRegistry(true)
+		slackMock := &commandTestSlackService{}
+		slackUC := usecase.NewSlackUseCases(repo, registry, nil, nil, slackMock)
+		caseUC := usecase.NewCaseUseCase(repo, registry, nil, nil, "")
+		seedSlackUsers(t, repo, "U001")
+
+		meta, _ := json.Marshal(map[string]string{"workspace_id": "risk", "channel_id": "C001"})
+		callback := &goslack.InteractionCallback{
+			User: goslack.User{ID: "U001"},
+			View: goslack.View{
+				PrivateMetadata: string(meta),
+				State: &goslack.ViewState{Values: map[string]map[string]goslack.BlockAction{
+					usecase.SlackBlockIDCaseTitle: {usecase.SlackActionIDCaseTitle: {Value: "Sample draft"}},
+					usecase.SlackBlockIDCasePrivate: {usecase.SlackActionIDCasePrivate: {
+						SelectedOptions: []goslack.OptionBlockObject{{Value: "draft"}},
+					}},
+					usecase.SlackBlockIDCaseDueDate: {usecase.SlackActionIDCaseDueDate: {SelectedDate: "2030-06-30"}},
+				}},
+			},
+		}
+		gt.NoError(t, slackUC.HandleCaseCreationSubmit(ctx, caseUC, callback)).Required()
+
+		drafts, err := repo.Case().ListDrafts(ctx, "risk")
+		gt.NoError(t, err).Required()
+		gt.Array(t, drafts).Length(1).Required()
+		gt.Value(t, drafts[0].DueDate).NotNil().Required()
+		gt.Bool(t, drafts[0].DueDate.Equal(due)).True()
+	})
+
+	t.Run("edit submit sets and then clears the due date", func(t *testing.T) {
+		repo := memory.New()
+		registry := newRegistry(true)
+		created, err := repo.Case().Create(ctx, "risk", &model.Case{ReporterID: "U-REPORTER", Title: "Sample case 3"})
+		gt.NoError(t, err).Required()
+
+		slackUC := usecase.NewSlackUseCases(repo, registry, nil, nil, &commandTestSlackService{})
+		caseUC := usecase.NewCaseUseCase(repo, registry, nil, nil, "")
+		meta, _ := json.Marshal(map[string]any{"workspace_id": "risk", "channel_id": "C-CASE", "case_id": created.ID})
+		submit := func(selected string) {
+			callback := &goslack.InteractionCallback{
+				User: goslack.User{ID: "U001"},
+				View: goslack.View{
+					PrivateMetadata: string(meta),
+					State: &goslack.ViewState{Values: map[string]map[string]goslack.BlockAction{
+						usecase.SlackBlockIDCaseTitle:   {usecase.SlackActionIDCaseTitle: {Value: "Sample case 3"}},
+						usecase.SlackBlockIDCaseDueDate: {usecase.SlackActionIDCaseDueDate: {SelectedDate: selected}},
+					}},
+				},
+			}
+			gt.NoError(t, slackUC.HandleCaseEditSubmit(ctx, caseUC, callback)).Required()
+		}
+
+		submit("2030-06-30")
+		got, err := repo.Case().Get(ctx, "risk", created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, got.DueDate).NotNil().Required()
+		gt.Bool(t, got.DueDate.Equal(due)).True()
+
+		submit("")
+		got, err = repo.Case().Get(ctx, "risk", created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, got.DueDate).Nil()
+	})
+
+	t.Run("edit submit without the picker leaves a stored due date alone", func(t *testing.T) {
+		repo := memory.New()
+		registry := newRegistry(false)
+		created, err := repo.Case().Create(ctx, "risk", &model.Case{ReporterID: "U-REPORTER", Title: "Sample case 4", DueDate: &due})
+		gt.NoError(t, err).Required()
+
+		slackUC := usecase.NewSlackUseCases(repo, registry, nil, nil, &commandTestSlackService{})
+		caseUC := usecase.NewCaseUseCase(repo, registry, nil, nil, "")
+		meta, _ := json.Marshal(map[string]any{"workspace_id": "risk", "channel_id": "C-CASE", "case_id": created.ID})
+		callback := &goslack.InteractionCallback{
+			User: goslack.User{ID: "U001"},
+			View: goslack.View{
+				PrivateMetadata: string(meta),
+				State: &goslack.ViewState{Values: map[string]map[string]goslack.BlockAction{
+					usecase.SlackBlockIDCaseTitle: {usecase.SlackActionIDCaseTitle: {Value: "Sample case 4 renamed"}},
+				}},
+			},
+		}
+		gt.NoError(t, slackUC.HandleCaseEditSubmit(ctx, caseUC, callback)).Required()
+		got, err := repo.Case().Get(ctx, "risk", created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, got.Title).Equal("Sample case 4 renamed")
+		gt.Value(t, got.DueDate).NotNil().Required()
+		gt.Bool(t, got.DueDate.Equal(due)).True()
+	})
+
+	t.Run("an unparsable picker value fails the submit and writes nothing", func(t *testing.T) {
+		repo := memory.New()
+		registry := newRegistry(true)
+		slackUC := usecase.NewSlackUseCases(repo, registry, nil, nil, &commandTestSlackService{})
+		caseUC := usecase.NewCaseUseCase(repo, registry, nil, nil, "")
+		meta, _ := json.Marshal(map[string]string{"workspace_id": "risk", "channel_id": "C001"})
+		callback := &goslack.InteractionCallback{
+			User: goslack.User{ID: "U001"},
+			View: goslack.View{
+				PrivateMetadata: string(meta),
+				State: &goslack.ViewState{Values: map[string]map[string]goslack.BlockAction{
+					usecase.SlackBlockIDCaseTitle:   {usecase.SlackActionIDCaseTitle: {Value: "Sample case 5"}},
+					usecase.SlackBlockIDCaseDueDate: {usecase.SlackActionIDCaseDueDate: {SelectedDate: "not-a-date"}},
+				}},
+			},
+		}
+		gt.Value(t, slackUC.HandleCaseCreationSubmit(ctx, caseUC, callback)).NotNil()
+		cases, err := repo.Case().List(ctx, "risk")
+		gt.NoError(t, err).Required()
+		gt.Array(t, cases).Length(0)
 	})
 }

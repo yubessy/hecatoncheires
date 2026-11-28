@@ -14,6 +14,10 @@ case = "Case"
 [slack]
 allow_existing_channel = true
 
+# The built-in case due date (case-due-date.spec.ts).
+[case]
+due_date = true
+
 # Minimal field definitions for testing
 [[fields]]
 id = "category"

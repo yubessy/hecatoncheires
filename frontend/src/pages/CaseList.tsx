@@ -141,6 +141,8 @@ interface CaseRow {
   // Null for an active case. There is no derived `archived` boolean on the
   // wire; a row is archived when this is non-null.
   archivedAt?: string | null
+  // The built-in due date, null when unset.
+  dueDate?: string | null
   createdAt: string
   updatedAt: string
   fields: Array<{ fieldId: string; value: any; display?: FieldValueDisplay | null }>
@@ -150,12 +152,14 @@ const BUILTIN_COLUMNS = [
   { key: 'status', labelKey: 'headerStatus' as const, width: 110 },
   { key: 'assignees', labelKey: 'headerAssignees' as const, width: 140 },
   { key: 'reporter', labelKey: 'labelReporter' as const, width: 140 },
+  // Offered only when the workspace enables [case] due_date; see allColumns.
+  { key: 'dueDate', labelKey: 'labelDueDate' as const, width: 110 },
   { key: 'created', labelKey: 'headerCreated' as const, width: 110 },
   { key: 'updated', labelKey: 'headerUpdated' as const, width: 110 },
   { key: 'slack', labelKey: 'headerSlack' as const, width: 110 },
 ] as const
 
-const DEFAULT_VISIBLE = ['status', 'assignees', 'reporter', 'created', 'updated', 'slack']
+const DEFAULT_VISIBLE = ['status', 'assignees', 'reporter', 'dueDate', 'created', 'updated', 'slack']
 
 // The calendar day an RFC3339 timestamp falls on in the viewer's own timezone,
 // as `YYYY-MM-DD` — the format <input type="date"> exchanges. Rendering and
@@ -576,6 +580,7 @@ export default function CaseList() {
   }, [cases, t])
 
   const fieldDefs: FieldDef[] = useMemo(() => configData?.fieldConfiguration?.fields ?? [], [configData])
+  const dueDateEnabled = !!configData?.fieldConfiguration?.caseDueDateEnabled
 
   const filtered = useMemo(() => {
     const visible = pendingIds.size === 0 ? cases : cases.filter((c) => !pendingIds.has(c.id))
@@ -717,7 +722,9 @@ export default function CaseList() {
   }, [visibleIdSet])
 
   const allColumns = [
-    ...BUILTIN_COLUMNS.map((c) => ({ key: c.key, label: t(c.labelKey), width: c.width, custom: false as const })),
+    ...BUILTIN_COLUMNS
+      .filter((c) => c.key !== 'dueDate' || dueDateEnabled)
+      .map((c) => ({ key: c.key, label: t(c.labelKey), width: c.width, custom: false as const })),
     ...fieldDefs.map((f) => ({ key: `field:${f.id}`, label: f.name, width: 160, custom: true as const, def: f })),
   ]
 
@@ -759,6 +766,10 @@ export default function CaseList() {
             )
           }
           return <span className="soft">—</span>
+        case 'dueDate':
+          return c.dueDate
+            ? <span className="mono" style={{ fontSize: 12 }} data-testid="case-row-due-date">{formatCalendarDate(c.dueDate)}</span>
+            : <span className="soft">—</span>
         case 'created':
           return <span className="mono soft" style={{ fontSize: 12 }}>{formatDate(c.createdAt)}</span>
         case 'updated':

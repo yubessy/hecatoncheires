@@ -3,6 +3,7 @@ package casemulti_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
@@ -23,6 +24,7 @@ type createCaseCall struct {
 	assigneeIDs        []string
 	fieldValues        map[string]model.FieldValue
 	isPrivate          bool
+	dueDate            *time.Time
 }
 
 type updateCaseCall struct {
@@ -94,8 +96,8 @@ func (f *fakeCaseUC) GetCase(_ context.Context, _ string, id int64) (*model.Case
 	return c, nil
 }
 
-func (f *fakeCaseUC) CreateCase(_ context.Context, _ string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool) (*model.Case, error) {
-	f.createCalls = append(f.createCalls, createCaseCall{title: title, description: description, assigneeIDs: assigneeIDs, fieldValues: fieldValues, isPrivate: isPrivate})
+func (f *fakeCaseUC) CreateCase(_ context.Context, _ string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, dueDate *time.Time) (*model.Case, error) {
+	f.createCalls = append(f.createCalls, createCaseCall{title: title, description: description, assigneeIDs: assigneeIDs, fieldValues: fieldValues, isPrivate: isPrivate, dueDate: dueDate})
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -1049,4 +1051,69 @@ func TestUpdateCaseTool_PropagatesUseCaseError(t *testing.T) {
 
 	_, err := uct.Run(context.Background(), map[string]any{"case_id": int64(1), "title": "x"})
 	gt.Error(t, err).Is(sentinel)
+}
+
+func TestCaseTools_DueDate(t *testing.T) {
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	newTools := func(enabled bool, uc *fakeCaseUC) []gollem.Tool {
+		return casemulti.New(casemulti.Deps{WorkspaceID: "ws", CaseUC: uc, DueDateEnabled: enabled})
+	}
+
+	t.Run("the parameter is offered only when enabled", func(t *testing.T) {
+		for _, name := range []string{"case__create_case", "case__update_case"} {
+			gt.Value(t, toolByName(t, newTools(true, &fakeCaseUC{}), name).Spec().Parameters["due_date"]).NotNil()
+			gt.Value(t, toolByName(t, newTools(false, &fakeCaseUC{}), name).Spec().Parameters["due_date"]).Nil()
+		}
+	})
+
+	t.Run("create passes the parsed day and echoes it", func(t *testing.T) {
+		uc := &fakeCaseUC{createResp: &model.Case{ID: 3, Title: "Sample case 1", DueDate: &due}}
+		out, err := toolByName(t, newTools(true, uc), "case__create_case").Run(context.Background(),
+			map[string]any{"title": "Sample case 1", "due_date": "2030-06-30"})
+		gt.NoError(t, err).Required()
+		gt.Array(t, uc.createCalls).Length(1).Required()
+		gt.Value(t, uc.createCalls[0].dueDate).NotNil().Required()
+		gt.Bool(t, uc.createCalls[0].dueDate.Equal(due)).True()
+		gt.Value(t, out["due_date"]).Equal(any("2030-06-30"))
+	})
+
+	t.Run("create without the argument passes no due date", func(t *testing.T) {
+		uc := &fakeCaseUC{createResp: &model.Case{ID: 3, Title: "Sample case 2"}}
+		out, err := toolByName(t, newTools(true, uc), "case__create_case").Run(context.Background(),
+			map[string]any{"title": "Sample case 2"})
+		gt.NoError(t, err).Required()
+		gt.Array(t, uc.createCalls).Length(1).Required()
+		gt.Value(t, uc.createCalls[0].dueDate).Nil()
+		_, has := out["due_date"]
+		gt.Bool(t, has).False()
+	})
+
+	t.Run("update sets and clears", func(t *testing.T) {
+		uc := &fakeCaseUC{updateResp: &model.Case{ID: 3}}
+		tl := toolByName(t, newTools(true, uc), "case__update_case")
+		_, err := tl.Run(context.Background(), map[string]any{"case_id": float64(3), "due_date": "2030-06-30T00:00:00Z"})
+		gt.NoError(t, err).Required()
+		_, err = tl.Run(context.Background(), map[string]any{"case_id": float64(3), "due_date": ""})
+		gt.NoError(t, err).Required()
+		gt.Array(t, uc.updateCalls).Length(2).Required()
+		gt.Bool(t, uc.updateCalls[0].patch.DueDate.Equal(due)).True()
+		gt.Bool(t, uc.updateCalls[0].patch.ClearDueDate).False()
+		gt.Value(t, uc.updateCalls[1].patch.DueDate).Nil()
+		gt.Bool(t, uc.updateCalls[1].patch.ClearDueDate).True()
+	})
+
+	t.Run("a disabled workspace or a malformed date is rejected without a write", func(t *testing.T) {
+		uc := &fakeCaseUC{updateResp: &model.Case{ID: 3}, createResp: &model.Case{ID: 4}}
+		_, err := toolByName(t, newTools(false, uc), "case__update_case").Run(context.Background(),
+			map[string]any{"case_id": float64(3), "due_date": "2030-06-30"})
+		gt.Value(t, err).NotNil()
+		_, err = toolByName(t, newTools(true, uc), "case__update_case").Run(context.Background(),
+			map[string]any{"case_id": float64(3), "due_date": "tomorrow"})
+		gt.Value(t, err).NotNil()
+		_, err = toolByName(t, newTools(false, uc), "case__create_case").Run(context.Background(),
+			map[string]any{"title": "Sample case 3", "due_date": "2030-06-30"})
+		gt.Value(t, err).NotNil()
+		gt.Array(t, uc.updateCalls).Length(0)
+		gt.Array(t, uc.createCalls).Length(0)
+	})
 }

@@ -37,6 +37,8 @@ const (
 	SlackBlockIDCaseTitle        = "hc_case_title_block"
 	SlackActionIDCaseTitle       = "hc_case_title"
 	SlackBlockIDCaseDescription  = "hc_case_desc_block"
+	SlackBlockIDCaseDueDate      = "hc_case_due_block"
+	SlackActionIDCaseDueDate     = "hc_case_due"
 	SlackActionIDCaseDescription = "hc_case_desc"
 	SlackBlockIDCasePrivate      = "hc_case_private_block"
 	SlackActionIDCasePrivate     = "hc_case_private"
@@ -321,6 +323,11 @@ func (uc *SlackUseCases) HandleCaseCreationSubmit(ctx context.Context, caseUC *C
 
 	isPrivate, isDraft, isTest := readCaseOptionFlags(blockValues)
 
+	dueDate, _, err := readCaseDueDate(blockValues)
+	if err != nil {
+		return goerr.Wrap(err, "read the case due date", goerr.V("workspace_id", meta.WorkspaceID))
+	}
+
 	userID := callback.User.ID
 
 	// Slash-command originated Create Case does not pass through the
@@ -334,11 +341,11 @@ func (uc *SlackUseCases) HandleCaseCreationSubmit(ctx context.Context, caseUC *C
 	createCtx := auth.ContextWithToken(ctx, &auth.Token{Sub: userID})
 
 	if isDraft {
-		return uc.createDraftFromSubmit(createCtx, caseUC, callback, meta, title, description, fieldValues, isPrivate, isTest)
+		return uc.createDraftFromSubmit(createCtx, caseUC, callback, meta, title, description, fieldValues, isPrivate, isTest, dueDate)
 	}
 
 	// Create case using existing CaseUseCase
-	created, err := caseUC.CreateCase(createCtx, meta.WorkspaceID, title, description, []string{userID}, fieldValues, isPrivate, isTest, meta.SourceTeamID, meta.RequestKey)
+	created, err := caseUC.CreateCase(createCtx, meta.WorkspaceID, title, description, []string{userID}, fieldValues, isPrivate, isTest, meta.SourceTeamID, meta.RequestKey, WithCaseDueDate(dueDate))
 	if err != nil {
 		return goerr.Wrap(err, "failed to create case via slash command",
 			goerr.V("workspace_id", meta.WorkspaceID),
@@ -410,6 +417,55 @@ func readCaseOptionFlags(blockValues map[string]map[string]slack.BlockAction) (i
 	return isPrivate, isDraft, isTest
 }
 
+// caseDueDateBlock builds the optional date picker for the built-in case due
+// date, pre-selecting initial when set. It returns nil when the workspace does
+// not enable [case] due_date, so neither modal shows the input.
+func (uc *SlackUseCases) caseDueDateBlock(ctx context.Context, workspaceID string, initial *time.Time) slack.Block {
+	if uc.registry == nil {
+		return nil
+	}
+	entry, err := uc.registry.Get(workspaceID)
+	if err != nil || !entry.DueDateEnabled() {
+		return nil
+	}
+	picker := slack.NewDatePickerBlockElement(SlackActionIDCaseDueDate)
+	if initial != nil {
+		picker.InitialDate = initial.UTC().Format(model.CaseDueDateLayout)
+	}
+	input := slack.NewInputBlock(
+		SlackBlockIDCaseDueDate,
+		slack.NewTextBlockObject(slack.PlainTextType, i18n.T(ctx, i18n.MsgFieldCaseDueDate), false, false),
+		nil,
+		picker,
+	)
+	input.Optional = true
+	return input
+}
+
+// readCaseDueDate reads the case due date picker. present reports whether the
+// modal carried the picker at all; dueDate is nil when it did but no date was
+// chosen. The chosen day is stored as midnight UTC, the same convention as an
+// Action's due date.
+func readCaseDueDate(blockValues map[string]map[string]slack.BlockAction) (dueDate *time.Time, present bool, err error) {
+	block, ok := blockValues[SlackBlockIDCaseDueDate]
+	if !ok {
+		return nil, false, nil
+	}
+	action, ok := block[SlackActionIDCaseDueDate]
+	if !ok {
+		return nil, false, nil
+	}
+	if action.SelectedDate == "" {
+		return nil, true, nil
+	}
+	t, err := time.Parse(model.CaseDueDateLayout, action.SelectedDate)
+	if err != nil {
+		return nil, true, goerr.Wrap(err, "invalid due date from the date picker",
+			goerr.V("selected_date", action.SelectedDate))
+	}
+	return &t, true, nil
+}
+
 // readCaseTestFlag pulls the Test-case boolean out of the case edit
 // modal's standalone Test checkbox group (SlackBlockIDCaseTest /
 // SlackActionIDCaseTest). Absent / unticked means false.
@@ -448,11 +504,12 @@ func (uc *SlackUseCases) createDraftFromSubmit(
 	fieldValues map[string]model.FieldValue,
 	isPrivate bool,
 	isTest bool,
+	dueDate *time.Time,
 ) error {
 	userID := callback.User.ID
 	ctx = auth.ContextWithToken(ctx, &auth.Token{Sub: userID})
 
-	created, err := caseUC.CreateDraft(ctx, meta.WorkspaceID, title, description, []string{userID}, fieldValues, isPrivate, isTest)
+	created, err := caseUC.CreateDraft(ctx, meta.WorkspaceID, title, description, []string{userID}, fieldValues, isPrivate, isTest, WithCaseDueDate(dueDate))
 	if err != nil {
 		uc.notifyDraftSubmitFailure(ctx, meta.ChannelID, userID)
 		return goerr.Wrap(err, "failed to save draft via slash command",
@@ -620,6 +677,9 @@ func (uc *SlackUseCases) buildCaseCreationModal(ctx context.Context, workspaceID
 		titleInput,
 		descInput,
 		optionsInput,
+	}
+	if block := uc.caseDueDateBlock(ctx, workspaceID, nil); block != nil {
+		blocks = append(blocks, block)
 	}
 
 	// Add custom field inputs from workspace schema
@@ -986,6 +1046,9 @@ func (uc *SlackUseCases) buildCaseEditModal(ctx context.Context, workspaceID, ch
 		assigneeInput,
 		testInput,
 	}
+	if block := uc.caseDueDateBlock(ctx, workspaceID, existingCase.DueDate); block != nil {
+		blocks = append(blocks, block)
+	}
 
 	// Add custom field inputs with prefilled values
 	if schema != nil {
@@ -1062,6 +1125,18 @@ func (uc *SlackUseCases) HandleCaseEditSubmit(ctx context.Context, caseUC *CaseU
 		Description: &description,
 		IsTest:      &isTest,
 		Fields:      fieldValues,
+	}
+	// The due date picker is rendered only when the workspace enables it, so
+	// its absence leaves the stored value alone; when it is present, an empty
+	// picker means the user cleared it.
+	dueDate, dueDatePresent, err := readCaseDueDate(blockValues)
+	if err != nil {
+		return goerr.Wrap(err, "read the case due date",
+			goerr.V("workspace_id", meta.WorkspaceID), goerr.V("case_id", meta.CaseID))
+	}
+	if dueDatePresent {
+		patch.DueDate = dueDate
+		patch.ClearDueDate = dueDate == nil
 	}
 	updated, err := caseUC.UpdateCase(ctx, meta.WorkspaceID, meta.CaseID, patch)
 	if err != nil {

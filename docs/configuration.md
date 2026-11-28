@@ -1254,6 +1254,47 @@ Action board filtered to the Case. With it off, the sidebar shows only
 **Board**, and the `/actions` URL forwards to the Case board. How these Actions are announced in
 Slack is described in [Slack → Actions in thread mode](slack.md#actions-in-thread-mode).
 
+### Built-in case due date (`[case] due_date`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `due_date` | bool | No | `false` | Gives this workspace's Cases a built-in due date, the Case-level counterpart of an Action's due date. Valid in **both** channel mode and thread mode. |
+
+```toml
+[case]
+due_date = true
+```
+
+A channel-mode workspace may carry a `[case]` section that holds only this key;
+it does not need (and does not get) a `[case.status]` set.
+
+With the option on:
+
+- **Web UI**: the New / Edit case form has a due date input, the case detail
+  sidebar shows the due date as an inline-editable date (clearing it removes
+  the due date), and the case list gets a **Due Date** column.
+- **Slack**: the case create and edit modals (`/` command) have an optional
+  date picker, prefilled with the stored date when editing.
+- **Agents**: `case__update_case` (and the cross-case `case__create_case` /
+  `case__update_case` of the workspace agent) take a `due_date` argument —
+  `YYYY-MM-DD` or RFC3339, an empty string clears it — and the case-channel,
+  case-thread and Job system prompts show the case's current due date.
+- **API**: `Case.dueDate` on the GraphQL API, `dueDate` / `clearDueDate` on the
+  case mutations, `fieldConfiguration.caseDueDateEnabled`, and `due_date` on
+  the MCP case views and the BigQuery `cases` table (see [Export](export.md)).
+
+A due date is a calendar day, stored as midnight UTC of the chosen day (the same
+convention as an Action's due date).
+
+**Turning it on for an existing workspace** needs no migration: Cases created
+before simply have no due date, and any of them can be given one from then on.
+
+**Turning it off** hides the inputs and makes every write path that would *set*
+a due date fail (`BAD_USER_INPUT` on GraphQL). Due dates already stored are
+kept: the case detail page and the agent prompts still show them, and they can
+still be cleared. `validate --check-db` does not report them (see
+[CLI → validate](cli.md#what---check-db-checks)).
+
 ### Case trigger (thread mode)
 
 `[slack] trigger` selects **what starts a Case** in a monitored channel:

@@ -32,6 +32,7 @@ export const GET_FIELD_CONFIGURATION = gql`
         }
       }
       allowExistingSlackChannel
+      caseDueDateEnabled
     }
   }
 `

@@ -45,7 +45,7 @@ func (h threadcaseHost) CreateCase(ctx context.Context, target threadcase.Target
 	// requestKey is empty: the thread creation paths dedup by the existing message
 	// ts (ReactionClaim + GetBySlackThread), not by a request key.
 	c, err := h.uc.deps.CaseUC.createThreadBoundCase(ctx, target.WorkspaceID,
-		target.ChannelID, target.ThreadTS, req.reporter, p.Title, p.Description, p.Fields, "")
+		target.ChannelID, target.ThreadTS, req.reporter, p.Title, p.Description, p.Fields, "", nil)
 	if err != nil {
 		return goerr.Wrap(err, "create the thread-bound case",
 			goerr.V("workspace_id", target.WorkspaceID))

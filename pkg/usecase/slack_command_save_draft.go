@@ -90,7 +90,12 @@ func (uc *SlackUseCases) HandleSaveAsDraftClick(ctx context.Context, caseUC *Cas
 	// and "Save as Draft → Submit".
 	assigneeIDs := []string{callback.User.ID}
 
-	created, err := caseUC.CreateDraft(ctx, meta.WorkspaceID, title, description, assigneeIDs, fieldValuesMap, isPrivate, isTest)
+	dueDate, _, err := readCaseDueDate(blockValues)
+	if err != nil {
+		return goerr.Wrap(err, "read the case due date", goerr.V("workspace_id", meta.WorkspaceID))
+	}
+
+	created, err := caseUC.CreateDraft(ctx, meta.WorkspaceID, title, description, assigneeIDs, fieldValuesMap, isPrivate, isTest, WithCaseDueDate(dueDate))
 	if err != nil {
 		uc.notifySaveDraftFailure(ctx, meta.ChannelID, callback.User.ID)
 		return goerr.Wrap(err, "failed to save draft",

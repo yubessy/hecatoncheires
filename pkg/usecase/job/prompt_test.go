@@ -1413,3 +1413,26 @@ func TestParseUserPromptTemplate(t *testing.T) {
 		gt.Error(t, err)
 	})
 }
+
+func TestBuildSystemPrompt_CaseDueDate(t *testing.T) {
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	j := &model.Job{ID: "summarize", Prompt: "{{.Case.Title}}"}
+	render := func(ws *model.WorkspaceEntry, c *model.Case) string {
+		t.Helper()
+		got, err := job.BuildSystemPrompt(job.PromptInputs{Job: j, Workspace: ws, Case: c, Event: job.Event{
+			Domain: model.JobEventDomainCase, WorkspaceID: "ws", CaseID: c.ID,
+		}})
+		gt.NoError(t, err).Required()
+		return got
+	}
+
+	enabled := newWorkspace("ws", "WS")
+	enabled.CaseDueDate = true
+	withDue := newCase(42)
+	withDue.DueDate = &due
+
+	mustContain(t, render(enabled, withDue), "- due_date: 2030-06-30\n")
+	mustContain(t, render(enabled, newCase(43)), "- due_date: (empty)\n")
+	gt.Bool(t, strings.Contains(render(newWorkspace("ws", "WS"), newCase(44)), "due_date")).False()
+	mustContain(t, render(newWorkspace("ws", "WS"), withDue), "- due_date: 2030-06-30\n")
+}

@@ -54,7 +54,7 @@ func ProposalAskForTest(uc *MentionProposalUseCase, ctx context.Context,
 // (unexported). Callers that used the fields-less CreateThreadCase pass a nil
 // fieldValues and an empty requestKey.
 func (uc *CaseUseCase) CreateThreadBoundCaseForTest(ctx context.Context, workspaceID, channelID, threadTS, reporterID, title, description string, fieldValues map[string]model.FieldValue, requestKey string) (*model.Case, error) {
-	return uc.createThreadBoundCase(ctx, workspaceID, channelID, threadTS, reporterID, title, description, fieldValues, requestKey)
+	return uc.createThreadBoundCase(ctx, workspaceID, channelID, threadTS, reporterID, title, description, fieldValues, requestKey, nil)
 }
 
 // ProgressBlockForTest exposes progressBlock, the single context block a run's

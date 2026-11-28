@@ -659,17 +659,17 @@ func (uc *CaseUseCase) CreateCase(ctx context.Context, workspaceID string, title
 		opt(&o)
 	}
 	if o.existingSlackChannelSet {
-		return uc.createCaseInExistingSlackChannel(ctx, workspaceID, title, description, assigneeIDs, fieldValues, isPrivate, isTest, sourceTeamID, requestKey, o.existingSlackChannelID)
+		return uc.createCaseInExistingSlackChannel(ctx, workspaceID, title, description, assigneeIDs, fieldValues, isPrivate, isTest, sourceTeamID, requestKey, o.existingSlackChannelID, o.dueDate)
 	}
 	return uc.openInWorkspaceMode(ctx, workspaceID, isPrivate, openProducers{
 		Channel: func(ctx context.Context, entry *model.WorkspaceEntry) (*model.Case, error) {
-			return uc.createChannelModeCase(ctx, workspaceID, entry, title, description, assigneeIDs, fieldValues, isPrivate, isTest, sourceTeamID, requestKey, "")
+			return uc.createChannelModeCase(ctx, workspaceID, entry, title, description, assigneeIDs, fieldValues, isPrivate, isTest, sourceTeamID, requestKey, "", o.dueDate)
 		},
 		// Thread-mode cases carry only title / description / fields (+ requestKey
 		// for dedup); the caller's assigneeIDs / isTest / sourceTeamID are
 		// intentionally ignored, exactly as reaction-created cases are.
 		Thread: func(ctx context.Context, entry *model.WorkspaceEntry) (*model.Case, error) {
-			return uc.createThreadModeCase(ctx, workspaceID, entry, title, description, fieldValues, requestKey)
+			return uc.createThreadModeCase(ctx, workspaceID, entry, title, description, fieldValues, requestKey, o.dueDate)
 		},
 	})
 }
@@ -679,8 +679,9 @@ func (uc *CaseUseCase) CreateCase(ctx context.Context, workspaceID string, title
 // CreateCase so the channel form is one named producer behind the shared funnel.
 // existingSlackChannelID is passed through to activateChannelModeCase; empty
 // creates a new channel.
-func (uc *CaseUseCase) createChannelModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string, existingSlackChannelID string) (*model.Case, error) {
+func (uc *CaseUseCase) createChannelModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string, existingSlackChannelID string, dueDate *time.Time) (*model.Case, error) {
 	created, err := uc.persistCase(ctx, workspaceID, persistCaseInput{
+		DueDate:     dueDate,
 		Title:       title,
 		Description: description,
 		Status:      types.CaseStatusOpen,
@@ -737,7 +738,7 @@ func (uc *CaseUseCase) createChannelModeCase(ctx context.Context, workspaceID st
 // can never dedup a redelivery; requestKey is the only stable key across a
 // Slack redelivery / double-submit of the slash-command or mention-proposal
 // entry points.
-func (uc *CaseUseCase) createThreadModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, title, description string, fieldValues map[string]model.FieldValue, requestKey string) (*model.Case, error) {
+func (uc *CaseUseCase) createThreadModeCase(ctx context.Context, workspaceID string, entry *model.WorkspaceEntry, title, description string, fieldValues map[string]model.FieldValue, requestKey string, dueDate *time.Time) (*model.Case, error) {
 	// The caller (CreateCase) only routes here when the Slack service and the
 	// monitored channel are both present, so both are safe to use.
 	dest := entry.SlackMonitorChannelID
@@ -748,6 +749,11 @@ func (uc *CaseUseCase) createThreadModeCase(ctx context.Context, workspaceID str
 	// just because the workspace is thread mode.
 	if title == "" {
 		return nil, goerr.New("case title is required")
+	}
+	// Like the field gate below, the due date gate runs before any Slack side
+	// effect so a rejected request leaves no anchor in the monitored channel.
+	if err := uc.assertDueDateAllowed(workspaceID, dueDate); err != nil {
+		return nil, err
 	}
 
 	// Idempotency: a re-delivered submission with the same requestKey must return
@@ -786,7 +792,7 @@ func (uc *CaseUseCase) createThreadModeCase(ctx context.Context, workspaceID str
 		return nil, err
 	}
 
-	created, err := uc.createThreadBoundCase(ctx, workspaceID, dest, rootTS, reporterID, title, description, fieldValues, requestKey)
+	created, err := uc.createThreadBoundCase(ctx, workspaceID, dest, rootTS, reporterID, title, description, fieldValues, requestKey, dueDate)
 	if err != nil {
 		// The field gate above already ran, so reaching here means an
 		// infrastructure failure (repo write). Replace the lingering placeholder
@@ -809,11 +815,19 @@ func (uc *CaseUseCase) createThreadModeCase(ctx context.Context, workspaceID str
 // The reporter (auth-context Slack user) becomes the draft owner; the
 // returned case carries the assigned ID so the caller can echo it back to
 // the user.
-func (uc *CaseUseCase) CreateDraft(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool) (*model.Case, error) {
+//
+// Of the CreateCaseOption values only WithCaseDueDate applies to a draft; an
+// existing-channel option is ignored (the channel is chosen on submit).
+func (uc *CaseUseCase) CreateDraft(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, opts ...CreateCaseOption) (*model.Case, error) {
+	var o createCaseOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
 	// Title is intentionally optional for drafts: half-written entries are
 	// the whole point. We still validate field values to keep the draft
 	// usable on Submit without surprise validation failures.
 	return uc.persistCase(ctx, workspaceID, persistCaseInput{
+		DueDate:     o.dueDate,
 		Title:       title,
 		Description: description,
 		Status:      types.CaseStatusDraft,
@@ -835,6 +849,7 @@ type persistCaseInput struct {
 	IsTest      bool
 	FieldValues map[string]model.FieldValue
 	RequestKey  string
+	DueDate     *time.Time
 }
 
 // persistCase performs request-key deduplication, field validation, and
@@ -846,6 +861,10 @@ func (uc *CaseUseCase) persistCase(ctx context.Context, workspaceID string, in p
 	// entry can be picked up later.
 	if !in.Status.IsDraft() && in.Title == "" {
 		return nil, goerr.New("case title is required")
+	}
+
+	if err := uc.assertDueDateAllowed(workspaceID, in.DueDate); err != nil {
+		return nil, err
 	}
 
 	// Private cases are channel-mode-only: the sole effect of IsPrivate is a
@@ -909,6 +928,7 @@ func (uc *CaseUseCase) persistCase(ctx context.Context, workspaceID string, in p
 		IsTest:      in.IsTest,
 		FieldValues: in.FieldValues,
 		RequestKey:  in.RequestKey,
+		DueDate:     in.DueDate,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -1071,6 +1091,64 @@ type CaseUpdate struct {
 	// entries on top of the existing values (callers cannot remove individual
 	// entries via this API).
 	Fields map[string]model.FieldValue
+	// DueDate, when non-nil, sets the built-in due date; it is rejected with
+	// ErrCaseDueDateDisabled unless the workspace enables [case] due_date.
+	DueDate *time.Time
+	// ClearDueDate removes the built-in due date and wins over DueDate. It is
+	// accepted whether or not the option is on, so a due date stored while
+	// it was on can still be removed after it is turned off.
+	ClearDueDate bool
+}
+
+// DueDateEnabled reports whether the workspace's Cases carry the built-in due
+// date ([case] due_date). An unknown workspace or a nil registry returns false.
+func (uc *CaseUseCase) DueDateEnabled(_ context.Context, workspaceID string) bool {
+	return uc.dueDateEnabled(workspaceID)
+}
+
+// dueDateEnabled is DueDateEnabled for the usecase's own gates, which have no
+// use for a context.
+func (uc *CaseUseCase) dueDateEnabled(workspaceID string) bool {
+	if uc.workspaceRegistry == nil {
+		return false
+	}
+	entry, err := uc.workspaceRegistry.Get(workspaceID)
+	if err != nil {
+		return false
+	}
+	return entry.DueDateEnabled()
+}
+
+// assertDueDateAllowed rejects a due date being SET on a Case of a workspace
+// that has not enabled [case] due_date. A nil dueDate (unset, or a clear) is
+// always allowed.
+func (uc *CaseUseCase) assertDueDateAllowed(workspaceID string, dueDate *time.Time) error {
+	if dueDate == nil {
+		return nil
+	}
+	if !uc.dueDateEnabled(workspaceID) {
+		return goerr.Wrap(ErrCaseDueDateDisabled, "this workspace does not enable the built-in case due date",
+			goerr.V("workspace_id", workspaceID))
+	}
+	return nil
+}
+
+// applyDueDatePatch applies the due date half of a CaseUpdate onto c, after
+// checking it against the workspace option.
+func (uc *CaseUseCase) applyDueDatePatch(workspaceID string, c *model.Case, patch CaseUpdate) error {
+	if patch.ClearDueDate {
+		c.DueDate = nil
+		return nil
+	}
+	if patch.DueDate == nil {
+		return nil
+	}
+	if err := uc.assertDueDateAllowed(workspaceID, patch.DueDate); err != nil {
+		return goerr.Wrap(err, "case due date rejected", goerr.V(CaseIDKey, c.ID))
+	}
+	due := *patch.DueDate
+	c.DueDate = &due
+	return nil
 }
 
 func (uc *CaseUseCase) UpdateCase(ctx context.Context, workspaceID string, id int64, patch CaseUpdate) (*model.Case, error) {
@@ -1108,6 +1186,10 @@ func (uc *CaseUseCase) UpdateCase(ctx context.Context, workspaceID string, id in
 
 	if patch.IsTest != nil {
 		existingCase.IsTest = *patch.IsTest
+	}
+
+	if err := uc.applyDueDatePatch(workspaceID, existingCase, patch); err != nil {
+		return nil, err
 	}
 
 	// Validate the submitted fields through the shared gate, then merge the
@@ -2060,9 +2142,12 @@ func (uc *CaseUseCase) workspaceIsThreadMode(workspaceID string) (bool, error) {
 // Slack-thread creation paths, which dedup by their existing message ts). Web /
 // slash / mention creation passes it so a redelivered submission can be deduped
 // via GetByRequestKey before a second thread root is posted.
-func (uc *CaseUseCase) createThreadBoundCase(ctx context.Context, workspaceID, channelID, threadTS, reporterID, title, description string, fieldValues map[string]model.FieldValue, requestKey string) (*model.Case, error) {
+func (uc *CaseUseCase) createThreadBoundCase(ctx context.Context, workspaceID, channelID, threadTS, reporterID, title, description string, fieldValues map[string]model.FieldValue, requestKey string, dueDate *time.Time) (*model.Case, error) {
 	if channelID == "" || threadTS == "" {
 		return nil, goerr.New("channelID and threadTS are required for thread case")
+	}
+	if err := uc.assertDueDateAllowed(workspaceID, dueDate); err != nil {
+		return nil, err
 	}
 
 	existing, err := uc.repo.Case().GetBySlackThread(ctx, workspaceID, channelID, threadTS)
@@ -2089,6 +2174,7 @@ func (uc *CaseUseCase) createThreadBoundCase(ctx context.Context, workspaceID, c
 		ReporterID:  reporterID,
 		FieldValues: fieldValues,
 		RequestKey:  requestKey,
+		DueDate:     dueDate,
 		CreatedAt:   now,
 	}
 	// Apply the monitored-channel thread binding (channel, thread ts, initial
@@ -2335,6 +2421,9 @@ func (uc *CaseUseCase) SubmitDraft(ctx context.Context, workspaceID string, id i
 		}
 		if patch.IsTest != nil {
 			c.IsTest = *patch.IsTest
+		}
+		if err := uc.applyDueDatePatch(workspaceID, c, *patch); err != nil {
+			return nil, err
 		}
 		// Assignees are not part of the submit-draft patch; they are managed
 		// via AssignCase / UnassignCase on the draft before promotion.

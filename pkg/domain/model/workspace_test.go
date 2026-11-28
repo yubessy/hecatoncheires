@@ -389,3 +389,11 @@ func TestWorkspaceEntry_ActionsEnabled(t *testing.T) {
 	gt.Bool(t, (&model.WorkspaceEntry{CaseMode: model.CaseModeThread}).ActionsEnabled()).False()
 	gt.Bool(t, (&model.WorkspaceEntry{CaseMode: model.CaseModeThread, CaseActions: true}).ActionsEnabled()).True()
 }
+
+func TestWorkspaceEntry_DueDateEnabled(t *testing.T) {
+	var unregistered *model.WorkspaceEntry
+	gt.Bool(t, unregistered.DueDateEnabled()).False()
+	gt.Bool(t, (&model.WorkspaceEntry{}).DueDateEnabled()).False()
+	gt.Bool(t, (&model.WorkspaceEntry{CaseDueDate: true}).DueDateEnabled()).True()
+	gt.Bool(t, (&model.WorkspaceEntry{CaseMode: model.CaseModeThread, CaseDueDate: true}).DueDateEnabled()).True()
+}

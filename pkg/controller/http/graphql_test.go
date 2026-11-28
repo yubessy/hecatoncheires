@@ -6553,3 +6553,166 @@ func TestGraphQLHandler_ExistingSlackChannel(t *testing.T) {
 		gt.Bool(t, data.List.FetchedAt.IsZero()).False()
 	})
 }
+
+// TestGraphQLHandler_CaseDueDate drives the built-in case due date through the
+// GraphQL API: the fieldConfiguration flag, createCase / updateCase /
+// createDraft / submitDraft, and the BAD_USER_INPUT rejection for a workspace
+// that does not enable [case] due_date.
+func TestGraphQLHandler_CaseDueDate(t *testing.T) {
+	const (
+		wsOn  = "ws-due-on"
+		wsOff = "ws-due-off"
+		user  = "U0ALICE"
+	)
+	repo := memory.New()
+	ctx := context.Background()
+	seedSlackUsersHTTP(t, repo, user)
+
+	registry := model.NewWorkspaceRegistry()
+	for _, ws := range []struct {
+		id      string
+		enabled bool
+	}{{wsOn, true}, {wsOff, false}} {
+		registry.Register(&model.WorkspaceEntry{
+			Workspace:   model.Workspace{ID: ws.id, Name: ws.id},
+			FieldSchema: &config.FieldSchema{Labels: config.EntityLabels{Case: "Case"}},
+			CaseDueDate: ws.enabled,
+		})
+	}
+	uc := usecase.New(repo, registry)
+	srv := handler.NewDefaultServer(gqlctrl.NewExecutableSchema(gqlctrl.Config{Resolvers: gqlctrl.NewResolver(repo, uc)}))
+	srv.SetErrorPresenter(func(ctx context.Context, err error) *gqlerror.Error {
+		gqlErr := graphql.DefaultErrorPresenter(ctx, err)
+		if gqlErr.Extensions == nil {
+			gqlErr.Extensions = map[string]any{}
+		}
+		maps.Copy(gqlErr.Extensions, gqlctrl.ErrorExtensions(err))
+		return gqlErr
+	})
+	h, err := httpctrl.New(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := gqlctrl.WithDataLoaders(r.Context(), gqlctrl.NewDataLoaders(repo, nil, uc))
+		srv.ServeHTTP(w, r.WithContext(ctx))
+	}))
+	gt.NoError(t, err).Required()
+
+	const due = "2030-06-30T00:00:00Z"
+	const later = "2030-07-31T00:00:00Z"
+	dueTime := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	laterTime := time.Date(2030, 7, 31, 0, 0, 0, 0, time.UTC)
+
+	type caseResp struct {
+		ID      int     `json:"id"`
+		DueDate *string `json:"dueDate"`
+	}
+
+	t.Run("fieldConfiguration reports whether the workspace enables it", func(t *testing.T) {
+		query := `query($workspaceId: String!) { fieldConfiguration(workspaceId: $workspaceId) { caseDueDateEnabled } }`
+		for ws, want := range map[string]bool{wsOn: true, wsOff: false} {
+			resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, query, map[string]any{"workspaceId": ws}, user))
+			gt.Array(t, resp.Errors).Length(0).Required()
+			var data struct {
+				FieldConfiguration struct {
+					CaseDueDateEnabled bool `json:"caseDueDateEnabled"`
+				} `json:"fieldConfiguration"`
+			}
+			gt.NoError(t, json.Unmarshal(resp.Data, &data)).Required()
+			gt.Value(t, data.FieldConfiguration.CaseDueDateEnabled).Equal(want)
+		}
+	})
+
+	t.Run("createCase and updateCase set, change and clear the due date", func(t *testing.T) {
+		createMutation := `mutation($workspaceId: String!, $input: CreateCaseInput!) {
+			createCase(workspaceId: $workspaceId, input: $input) { id dueDate }
+		}`
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createMutation, map[string]any{
+			"workspaceId": wsOn,
+			"input":       map[string]any{"title": "Sample case 1", "dueDate": due},
+		}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		var created struct {
+			CreateCase caseResp `json:"createCase"`
+		}
+		gt.NoError(t, json.Unmarshal(resp.Data, &created)).Required()
+		gt.Value(t, created.CreateCase.DueDate).NotNil().Required()
+		gt.Value(t, *created.CreateCase.DueDate).Equal(due)
+		stored, err := repo.Case().Get(ctx, wsOn, int64(created.CreateCase.ID))
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(dueTime)).True()
+
+		updateMutation := `mutation($workspaceId: String!, $input: UpdateCaseInput!) {
+			updateCase(workspaceId: $workspaceId, input: $input) { id dueDate }
+		}`
+		resp = parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, updateMutation, map[string]any{
+			"workspaceId": wsOn,
+			"input":       map[string]any{"id": created.CreateCase.ID, "dueDate": later},
+		}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		stored, err = repo.Case().Get(ctx, wsOn, int64(created.CreateCase.ID))
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(laterTime)).True()
+
+		resp = parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, updateMutation, map[string]any{
+			"workspaceId": wsOn,
+			"input":       map[string]any{"id": created.CreateCase.ID, "clearDueDate": true},
+		}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		var updated struct {
+			UpdateCase caseResp `json:"updateCase"`
+		}
+		gt.NoError(t, json.Unmarshal(resp.Data, &updated)).Required()
+		gt.Value(t, updated.UpdateCase.DueDate).Nil()
+		stored, err = repo.Case().Get(ctx, wsOn, int64(created.CreateCase.ID))
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).Nil()
+	})
+
+	t.Run("createDraft and submitDraft carry the due date", func(t *testing.T) {
+		createDraft := `mutation($workspaceId: String!, $input: CreateDraftInput!) {
+			createDraft(workspaceId: $workspaceId, input: $input) { id dueDate }
+		}`
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createDraft, map[string]any{
+			"workspaceId": wsOn,
+			"input":       map[string]any{"title": "Sample draft", "dueDate": due},
+		}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		var draft struct {
+			CreateDraft caseResp `json:"createDraft"`
+		}
+		gt.NoError(t, json.Unmarshal(resp.Data, &draft)).Required()
+		stored, err := repo.Case().Get(ctx, wsOn, int64(draft.CreateDraft.ID))
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(dueTime)).True()
+
+		submit := `mutation($workspaceId: String!, $id: Int!, $input: SubmitDraftInput) {
+			submitDraft(workspaceId: $workspaceId, id: $id, input: $input) { id dueDate }
+		}`
+		resp = parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, submit, map[string]any{
+			"workspaceId": wsOn,
+			"id":          draft.CreateDraft.ID,
+			"input":       map[string]any{"dueDate": later},
+		}, user))
+		gt.Array(t, resp.Errors).Length(0).Required()
+		stored, err = repo.Case().Get(ctx, wsOn, int64(draft.CreateDraft.ID))
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(laterTime)).True()
+	})
+
+	t.Run("a workspace without [case] due_date rejects a due date as bad user input", func(t *testing.T) {
+		createMutation := `mutation($workspaceId: String!, $input: CreateCaseInput!) {
+			createCase(workspaceId: $workspaceId, input: $input) { id }
+		}`
+		resp := parseGraphQLResponse(t, executeGraphQLRequestWithAuth(t, h, createMutation, map[string]any{
+			"workspaceId": wsOff,
+			"input":       map[string]any{"title": "Sample case 2", "dueDate": due},
+		}, user))
+		gt.Array(t, resp.Errors).Length(1).Required()
+		gt.Value(t, resp.Errors[0].Extensions["code"]).Equal(any(gqlctrl.ErrCodeBadUserInput))
+		cases, err := repo.Case().List(ctx, wsOff)
+		gt.NoError(t, err).Required()
+		gt.Array(t, cases).Length(0)
+	})
+}

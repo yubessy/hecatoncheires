@@ -966,3 +966,22 @@ func TestStartTurnGivesTheModelTheWorkspaceInstructions(t *testing.T) {
 	gt.String(t, prompts[0]).Contains("## Workspace-specific instructions\n")
 	gt.String(t, prompts[0]).Contains("Answer in at most five bullet points.")
 }
+
+func TestBuildSystemPrompt_DueDate(t *testing.T) {
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 5, 4, 12, 30, 0, 0, time.UTC)
+	enabled := &model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws-test"}, CaseDueDate: true}
+	disabled := &model.WorkspaceEntry{Workspace: model.Workspace{ID: "ws-test"}}
+
+	withDue := &model.Case{Title: "Sample case 1", Status: types.CaseStatusOpen, DueDate: &due}
+	without := &model.Case{Title: "Sample case 2", Status: types.CaseStatusOpen}
+
+	gt.String(t, casebound.BuildSystemPromptForTest(withDue, enabled, "C0TEST", "", now, nil, nil, nil)).
+		Contains("- Status: OPEN\n- Due date (YYYY-MM-DD): 2030-06-30\n")
+	gt.String(t, casebound.BuildSystemPromptForTest(without, enabled, "C0TEST", "", now, nil, nil, nil)).
+		Contains("- Due date (YYYY-MM-DD): (not set)\n")
+	gt.Bool(t, strings.Contains(
+		casebound.BuildSystemPromptForTest(without, disabled, "C0TEST", "", now, nil, nil, nil), "Due date")).False()
+	gt.String(t, casebound.BuildSystemPromptForTest(withDue, disabled, "C0TEST", "", now, nil, nil, nil)).
+		Contains("- Due date (YYYY-MM-DD): 2030-06-30\n")
+}

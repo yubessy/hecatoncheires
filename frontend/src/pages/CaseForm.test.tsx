@@ -7,7 +7,7 @@ import { GraphQLError } from 'graphql'
 import { MemoryRouter } from 'react-router'
 import { I18nProvider } from '../i18n'
 import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
-import { CREATE_CASE, GET_EXISTING_SLACK_CHANNEL_CANDIDATES } from '../graphql/case'
+import { CREATE_CASE, GET_EXISTING_SLACK_CHANNEL_CANDIDATES, UPDATE_CASE } from '../graphql/case'
 import { GET_FREQUENT_ASSIGNEE_IDS, GET_SLACK_USERS } from '../graphql/slackUsers'
 import { GET_CASE_STATUS_CONFIG } from '../graphql/caseStatus'
 import CaseForm from './CaseForm'
@@ -31,7 +31,7 @@ vi.mock('../contexts/workspace-context', () => ({
   }),
 }))
 
-function fieldConfigMock(allowExistingSlackChannel = false): MockedResponse {
+function fieldConfigMock(allowExistingSlackChannel = false, caseDueDateEnabled = false): MockedResponse {
   return {
     request: { query: GET_FIELD_CONFIGURATION, variables: { workspaceId: WORKSPACE_ID } },
     result: {
@@ -41,6 +41,7 @@ function fieldConfigMock(allowExistingSlackChannel = false): MockedResponse {
           labels: { case: 'Case' },
           actionConfig: { initial: 'BACKLOG', closed: ['COMPLETED'], statuses: [] },
           allowExistingSlackChannel,
+          caseDueDateEnabled,
         },
       },
     },
@@ -489,3 +490,87 @@ function renderChannelFormWithCreateResponse(extraMocks: MockedResponse[], statu
     </MemoryRouter>,
   )
 }
+
+describe('CaseForm built-in due date', () => {
+  function renderWithDueDate(
+    enabled: boolean,
+    extraMocks: MockedResponse[],
+    caseItem: Parameters<typeof CaseForm>[0]['caseItem'] = null,
+  ) {
+    return render(
+      <MemoryRouter initialEntries={[`/ws/${WORKSPACE_ID}/cases`]}>
+        <MockedProvider
+          mocks={[fieldConfigMock(false, enabled), slackUsersMock(), frequentAssigneesMock(), channelStatusMock(), ...extraMocks]}
+          addTypename={false}
+        >
+          <I18nProvider defaultLang="en">
+            <CaseForm caseItem={caseItem} onClose={vi.fn()} />
+          </I18nProvider>
+        </MockedProvider>
+      </MemoryRouter>,
+    )
+  }
+
+  function updateCaseMock(captured: { inputs: any[] }): MockedResponse {
+    return {
+      request: { query: UPDATE_CASE },
+      variableMatcher: (vars: any) => {
+        captured.inputs.push(vars.input)
+        return true
+      },
+      result: { data: { updateCase: createdCase } },
+      maxUsageCount: 10,
+    } as MockedResponse
+  }
+
+  it('hides the input and sends no due date when the workspace does not enable it', async () => {
+    const captured = { inputs: [] as any[] }
+    renderWithDueDate(false, [createCaseMock(captured)])
+    fireEvent.change(await screen.findByTestId('case-title-input'), { target: { value: 'Sample case 1' } })
+    await flush()
+    expect(screen.queryByTestId('case-due-date-input')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('case-submit-button'))
+    await waitFor(() => expect(captured.inputs).toHaveLength(1))
+    expect('dueDate' in captured.inputs[0]).toBe(false)
+  })
+
+  it('sends the chosen day as midnight UTC on create', async () => {
+    const captured = { inputs: [] as any[] }
+    renderWithDueDate(true, [createCaseMock(captured)])
+    fireEvent.change(await screen.findByTestId('case-title-input'), { target: { value: 'Sample case 1' } })
+    fireEvent.change(await screen.findByTestId('case-due-date-input'), { target: { value: '2030-06-30' } })
+
+    fireEvent.click(screen.getByTestId('case-submit-button'))
+    await waitFor(() => expect(captured.inputs).toHaveLength(1))
+    expect(captured.inputs[0].dueDate).toBe('2030-06-30T00:00:00Z')
+  })
+
+  it('omits the due date on create when none is chosen', async () => {
+    const captured = { inputs: [] as any[] }
+    renderWithDueDate(true, [createCaseMock(captured)])
+    fireEvent.change(await screen.findByTestId('case-title-input'), { target: { value: 'Sample case 1' } })
+    await screen.findByTestId('case-due-date-input')
+
+    fireEvent.click(screen.getByTestId('case-submit-button'))
+    await waitFor(() => expect(captured.inputs).toHaveLength(1))
+    expect('dueDate' in captured.inputs[0]).toBe(false)
+    expect('clearDueDate' in captured.inputs[0]).toBe(false)
+  })
+
+  it('prefills the stored day on edit and clears it when emptied', async () => {
+    const captured = { inputs: [] as any[] }
+    renderWithDueDate(true, [updateCaseMock(captured)], {
+      id: 1, title: 'Sample case 1', description: '', isPrivate: false, assigneeIDs: [], fields: [],
+      status: 'OPEN', dueDate: '2030-06-30T00:00:00Z',
+    })
+    const input = await screen.findByTestId('case-due-date-input')
+    expect(input).toHaveValue('2030-06-30')
+
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('case-submit-button'))
+    await waitFor(() => expect(captured.inputs).toHaveLength(1))
+    expect(captured.inputs[0].clearDueDate).toBe(true)
+    expect('dueDate' in captured.inputs[0]).toBe(false)
+  })
+})

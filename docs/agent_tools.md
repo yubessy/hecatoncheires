@@ -54,7 +54,7 @@ case edit is never answered with "I lack that tool".
 
 | Tool | R/W | Purpose | Notes |
 |------|-----|---------|-------|
-| `case__update_case` | W | Update title / description / custom field values. | Title and description are **full replacements** — review current values (shown in the system prompt) before overwriting. Cannot change status or assignees. Unknown field ids and type / option mismatches are rejected with a correctable error. |
+| `case__update_case` | W | Update title / description / custom field values, and the built-in due date when the workspace enables it. | Title and description are **full replacements** — review current values (shown in the system prompt) before overwriting. Cannot change status or assignees. Unknown field ids and type / option mismatches are rejected with a correctable error. `due_date` (`YYYY-MM-DD` or RFC3339; an empty string clears it) is offered only with [`[case] due_date`](configuration.md#built-in-case-due-date-case-due_date). |
 | `case__assign` | W | Add assignee(s) by delta (set union). | Rejects user ids that neither the SlackUser store nor Slack (`users.info`) knows as a human, non-deleted user. |
 | `case__unassign` | W | Remove assignee(s) by delta (set difference). | Does **not** reject unknown ids (a since-deleted user must stay removable). Applied atomically server-side, so concurrent edits never clobber. |
 | `case__update_case_status` | W | Move the case to another board status (a closed status closes the case). | Thread-mode only — present when the workspace has a configured case status set (`CaseStatusSet`). The parameter enumerates the configured status ids. The result carries `previous_board_status` and `changed` alongside `board_status`, so a call that set the status the case already had is recognisable as a no-op; nothing else reports one, since the thread announcement is emitted only on a real change. **See [Guardrails](#guardrails): Jobs are instructed not to close; the human-driven mention agent may.** |
@@ -79,8 +79,8 @@ no Action tools and it closes a Case by moving it to a closed board status:
 |------|-----|------|---------|-------|
 | `case__list_cases` | R | both | List cases in the workspace (optional `status` filter). | Cases the user cannot access are omitted. |
 | `case__get_case` | R | both | Fetch one case by `case_id`. | Denied for a private case the user is not a member of. |
-| `case__create_case` | W | both | Create a new case (channel mode: dedicated channel + invites + welcome; thread mode: a new thread in the monitored channel). | Reporter is the mentioning user. |
-| `case__update_case` | W | both | Update a case's title / description / fields (`case_id`). | Cannot change assignees — use `case__assign` / `case__unassign`. |
+| `case__create_case` | W | both | Create a new case (channel mode: dedicated channel + invites + welcome; thread mode: a new thread in the monitored channel). | Reporter is the mentioning user. Takes an optional `due_date` (`YYYY-MM-DD` or RFC3339) with `[case] due_date`. |
+| `case__update_case` | W | both | Update a case's title / description / fields (`case_id`), and its due date with `[case] due_date`. | Cannot change assignees — use `case__assign` / `case__unassign`. `due_date` behaves as in the case-bound tool above. |
 | `case__assign` | W | both | Add assignee(s) to a case by delta (`case_id`, set union). | Rejects user ids that neither the SlackUser store nor Slack (`users.info`) knows as a human, non-deleted user. |
 | `case__unassign` | W | both | Remove assignee(s) from a case by delta (`case_id`, set difference). | Unknown ids are not rejected (a since-deleted user must stay removable). |
 | `case__close_case` | W | channel | Close a case (`case_id`). | Channel mode only — built when the workspace has **no** `CaseStatusSet`. |

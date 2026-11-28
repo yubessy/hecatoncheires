@@ -5,7 +5,7 @@ import { MockedProvider, type MockedResponse } from '@apollo/client/testing'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 
 import { I18nProvider } from '../i18n'
-import { ARCHIVE_CASE, GET_CASE, UNARCHIVE_CASE } from '../graphql/case'
+import { ARCHIVE_CASE, GET_CASE, UNARCHIVE_CASE, UPDATE_CASE } from '../graphql/case'
 import { GET_CASE_STATUS_CONFIG } from '../graphql/caseStatus'
 import { GET_CASE_LATEST_JOB_RUN } from '../graphql/caseAgent'
 import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
@@ -104,7 +104,7 @@ function threadModeStatusMock(): MockedResponse {
   }
 }
 
-function supportingMocks(fieldDefs: unknown[] = [], opts: { threadMode?: boolean; actionsEnabled?: boolean } = {}): MockedResponse[] {
+function supportingMocks(fieldDefs: unknown[] = [], opts: { threadMode?: boolean; actionsEnabled?: boolean; dueDateEnabled?: boolean } = {}): MockedResponse[] {
   return [
     actionsEnabledMock(opts.actionsEnabled ?? !opts.threadMode),
     {
@@ -123,6 +123,7 @@ function supportingMocks(fieldDefs: unknown[] = [], opts: { threadMode?: boolean
               statuses: [],
             },
             allowExistingSlackChannel: false,
+            caseDueDateEnabled: opts.dueDateEnabled ?? false,
           },
         },
       },
@@ -360,5 +361,53 @@ describe('CaseDetail related actions section', () => {
     expect(await screen.findByTestId('add-action-button')).toBeInTheDocument()
     // /actions is the Action board in every workspace that has Actions.
     expect(screen.getByTestId('case-open-in-actions')).toBeInTheDocument()
+  })
+})
+
+describe('CaseDetail built-in due date', () => {
+  function caseWithDue(dueDate: string | null): MockedResponse {
+    return {
+      request: {
+        query: GET_CASE,
+        variables: { workspaceId: WORKSPACE, id: CASE_ID, actionsFilter: 'ACTIVE' },
+      },
+      maxUsageCount: 10,
+      result: { data: { case: { ...caseResult('OPEN', null), dueDate } } },
+    }
+  }
+
+  it('hides the section when the workspace does not enable it and the case has none', async () => {
+    renderDetail([caseWithDue(null), ...supportingMocks([], { dueDateEnabled: false })])
+    await screen.findByText('Suspicious login')
+    await screen.findByTestId('case-assignees-inline')
+    expect(screen.queryByTestId('case-due-date-section')).toBeNull()
+  })
+
+  it('still shows a due date the case kept after the option was turned off', async () => {
+    renderDetail([caseWithDue('2030-06-30T00:00:00Z'), ...supportingMocks([], { dueDateEnabled: false })])
+    const section = await screen.findByTestId('case-due-date-section')
+    expect(section).toHaveTextContent(new Date('2030-06-30T00:00:00Z').toLocaleDateString(undefined, { timeZone: 'UTC' }))
+  })
+
+  it('sets the due date through updateCase as midnight UTC', async () => {
+    const inputs: any[] = []
+    const updateMock = {
+      request: { query: UPDATE_CASE },
+      variableMatcher: (vars: any) => {
+        inputs.push(vars.input)
+        return true
+      },
+      result: { data: { updateCase: { ...caseResult('OPEN', null), dueDate: '2030-06-30T00:00:00Z' } } },
+      maxUsageCount: 10,
+    } as MockedResponse
+    renderDetail([caseWithDue(null), updateMock, ...supportingMocks([], { dueDateEnabled: true })])
+
+    fireEvent.click(await screen.findByTestId('case-due-date'))
+    const input = await screen.findByTestId('case-due-date-input')
+    fireEvent.change(input, { target: { value: '2030-06-30' } })
+    fireEvent.blur(input)
+
+    await waitFor(() => expect(inputs).toHaveLength(1))
+    expect(inputs[0]).toEqual({ id: CASE_ID, dueDate: '2030-06-30T00:00:00Z' })
   })
 })

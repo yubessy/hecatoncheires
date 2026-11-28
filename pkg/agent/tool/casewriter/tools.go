@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
@@ -45,6 +46,9 @@ type CaseUpdate struct {
 	Title       *string
 	Description *string
 	Fields      map[string]model.FieldValue
+	// DueDate sets the built-in due date; ClearDueDate removes it.
+	DueDate      *time.Time
+	ClearDueDate bool
 }
 
 // Deps groups the dependencies the casewriter tools need.
@@ -60,6 +64,10 @@ type Deps struct {
 	// Spec enumerate the valid board status ids. nil (a non-thread-mode
 	// workspace, which has no board status) means the status tool is not built.
 	StatusSet *model.ActionStatusSet
+	// DueDateEnabled is [case] due_date: when true, case__update_case takes a
+	// due_date argument. When false the argument is not offered, and the
+	// usecase rejects a due date that reaches it anyway.
+	DueDateEnabled bool
 }
 
 // New builds the writer-side case tools. case__update_case / case__assign /
@@ -96,10 +104,13 @@ type updateCaseTool struct {
 }
 
 func (t *updateCaseTool) Spec() gollem.ToolSpec {
-	return gollem.ToolSpec{
+	editable := "title, description, or custom field values"
+	if t.deps.DueDateEnabled {
+		editable = "title, description, due date, or custom field values"
+	}
+	spec := gollem.ToolSpec{
 		Name: "case__update_case",
-		Description: "Update the current case's title, description, or custom " +
-			"field values. This tool cannot change the case status (use " +
+		Description: "Update the current case's " + editable + ". This tool cannot change the case status (use " +
 			"case__update_case_status), cannot change assignees (use case__assign " +
 			"/ case__unassign), and cannot delete the case.\n\n" +
 			"IMPORTANT: Do not overwrite blindly. Before changing any field, " +
@@ -133,6 +144,14 @@ func (t *updateCaseTool) Spec() gollem.ToolSpec {
 			},
 		},
 	}
+	if t.deps.DueDateEnabled {
+		spec.Parameters["due_date"] = &gollem.Parameter{
+			Type: gollem.TypeString,
+			Description: "The case's due date as a calendar day (YYYY-MM-DD, e.g. 2026-03-01) or an " +
+				"RFC3339 timestamp. An empty string clears the due date. Omit to preserve it.",
+		}
+	}
+	return spec
 }
 
 func (t *updateCaseTool) Run(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -179,8 +198,28 @@ func (t *updateCaseTool) Run(ctx context.Context, args map[string]any) (map[stri
 		hasUpdate = true
 	}
 
+	if v, ok := args["due_date"]; ok && v != nil {
+		if !t.deps.DueDateEnabled {
+			return nil, goerr.New("this workspace does not enable the case due date; the due_date parameter is not supported")
+		}
+		s, ok := v.(string)
+		if !ok {
+			return nil, goerr.New("due_date must be a string", goerr.V("type", typeOf(v)))
+		}
+		if s == "" {
+			patch.ClearDueDate = true
+		} else {
+			due, err := model.ParseCaseDueDate(s)
+			if err != nil {
+				return nil, err
+			}
+			patch.DueDate = &due
+		}
+		hasUpdate = true
+	}
+
 	if !hasUpdate {
-		return nil, goerr.New("update_case requires at least one of title, description, fields")
+		return nil, goerr.New("update_case requires at least one of title, description, fields, due_date")
 	}
 
 	updated, err := t.deps.CaseUC.UpdateCase(ctx, t.deps.WorkspaceID, t.deps.CaseID, patch)
@@ -190,14 +229,18 @@ func (t *updateCaseTool) Run(ctx context.Context, args map[string]any) (map[stri
 			goerr.V("case_id", t.deps.CaseID))
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"id":           updated.ID,
 		"title":        updated.Title,
 		"description":  updated.Description,
 		"status":       updated.Status.String(),
 		"assignee_ids": updated.AssigneeIDs,
 		"field_values": renderFieldValues(updated.FieldValues),
-	}, nil
+	}
+	if t.deps.DueDateEnabled || updated.DueDate != nil {
+		out["due_date"] = updated.DueDateString()
+	}
+	return out, nil
 }
 
 type assignCaseTool struct {

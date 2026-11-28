@@ -240,6 +240,12 @@ type CaseSection struct {
 	// workspace configured before the option existed keeps having no Actions.
 	// Channel-mode workspaces always have Actions and ignore it.
 	Actions bool `toml:"actions"`
+	// DueDate enables the built-in due date on the workspace's Cases: the
+	// Web UI's due date input, the Slack create / edit modals' date picker and
+	// the agent's due_date argument. Default false. Valid in both modes, and
+	// may be turned on for a workspace that already has Cases: a Case stored
+	// before the option was on simply has no due date.
+	DueDate bool `toml:"due_date"`
 }
 
 // hasStatusConfig reports whether the section configures a case status set
@@ -419,6 +425,9 @@ type WorkspaceConfig struct {
 	// have Actions. Always false for a channel-mode workspace, which has
 	// Actions regardless (see model.WorkspaceEntry.ActionsEnabled).
 	CaseActions bool
+	// CaseDueDate is [case] due_date: whether the workspace's Cases carry the
+	// built-in due date. Valid in both modes.
+	CaseDueDate bool
 	// ReactionEmoji is the normalized (colon-stripped) reaction trigger emoji,
 	// empty when disabled.
 	ReactionEmoji string
@@ -1223,6 +1232,7 @@ func parseWorkspaceConfig(src WorkspaceConfigSource) (*WorkspaceConfig, error) {
 		AcceptBot:            appCfg.Slack.AcceptBot,
 		CaseStatusSet:        caseStatusSet,
 		CaseActions:          caseMode.IsThread() && appCfg.Case != nil && appCfg.Case.Actions,
+		CaseDueDate:          appCfg.Case != nil && appCfg.Case.DueDate,
 		ReactionEmoji:        normalizeReactionEmoji(appCfg.Slack.Reaction),
 		WorkspaceChannelID:   appCfg.Slack.WorkspaceChannel,
 		WorkspaceAgentPrompt: workspaceAgentPrompt,
@@ -1315,6 +1325,7 @@ func BuildWorkspaceRegistry(workspaceConfigs []*WorkspaceConfig) *model.Workspac
 			AcceptBot:               wc.AcceptBot,
 			CaseStatusSet:           wc.CaseStatusSet,
 			CaseActions:             wc.CaseActions,
+			CaseDueDate:             wc.CaseDueDate,
 			ReactionEmoji:           wc.ReactionEmoji,
 			SlackWorkspaceChannelID: wc.WorkspaceChannelID,
 			WorkspaceAgentPrompt:    wc.WorkspaceAgentPrompt,

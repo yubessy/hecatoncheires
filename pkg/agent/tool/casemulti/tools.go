@@ -100,7 +100,9 @@ type CaseUsecase interface {
 	// sourceTeamID and requestKey; the adapter fixes these to false, "" and ""
 	// respectively — agent-tool creation has no Slack-modal double-submit to
 	// dedup, mirroring the GraphQL mutation's call site.
-	CreateCase(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool) (*model.Case, error)
+	// dueDate is the built-in due date the new case starts with; nil leaves
+	// it unset.
+	CreateCase(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, dueDate *time.Time) (*model.Case, error)
 	// UpdateCase is invoked by case__update_case.
 	UpdateCase(ctx context.Context, workspaceID string, id int64, patch CaseUpdate) (*model.Case, error)
 	// AssignCase is invoked by case__assign. It is a delta add (set union), not
@@ -129,6 +131,9 @@ type CaseUpdate struct {
 	// nil means "preserve all stored field values"; a non-nil map merges its
 	// entries on top of the existing ones.
 	Fields map[string]model.FieldValue
+	// DueDate sets the built-in due date; ClearDueDate removes it.
+	DueDate      *time.Time
+	ClearDueDate bool
 }
 
 // ActionUsecase is the narrow surface of usecase.ActionUseCase /
@@ -205,6 +210,45 @@ type Deps struct {
 	// would misfire, since a channel-mode config carrying an unused
 	// [case.status] section still resolves a non-nil status set.
 	StatusSet *model.ActionStatusSet
+	// DueDateEnabled is [case] due_date: when true, case__create_case and
+	// case__update_case take a due_date argument. When false it is not
+	// offered, and the usecase rejects a due date that reaches it anyway.
+	DueDateEnabled bool
+}
+
+// dueDateParameter is the due_date argument of case__create_case /
+// case__update_case. clearable adds the "empty string clears" rule, which only
+// an update has a use for.
+func dueDateParameter(clearable bool) *gollem.Parameter {
+	desc := "The case's due date as a calendar day (YYYY-MM-DD, e.g. 2026-03-01) or an RFC3339 timestamp."
+	if clearable {
+		desc += " An empty string clears the due date. Omit to preserve it."
+	}
+	return &gollem.Parameter{Type: gollem.TypeString, Description: desc}
+}
+
+// readDueDate reads the due_date argument. present reports whether one was
+// supplied; due is nil when it was the empty string (a clear).
+func (d Deps) readDueDate(args map[string]any) (due *time.Time, present bool, err error) {
+	v, ok := args["due_date"]
+	if !ok || v == nil {
+		return nil, false, nil
+	}
+	if !d.DueDateEnabled {
+		return nil, false, goerr.New("this workspace does not enable the case due date; the due_date parameter is not supported")
+	}
+	s, ok := v.(string)
+	if !ok {
+		return nil, false, goerr.New("due_date must be a string", goerr.V("type", typeOf(v)))
+	}
+	if s == "" {
+		return nil, true, nil
+	}
+	t, err := model.ParseCaseDueDate(s)
+	if err != nil {
+		return nil, false, err
+	}
+	return &t, true, nil
 }
 
 // New returns the cross-case tools. Returns nil (empty) when CaseUC == nil so
@@ -332,7 +376,7 @@ func caseToListMap(c *model.Case) map[string]any {
 // caseToDetailMap renders a Case's full detail for case__get_case /
 // case__create_case / case__update_case / case__close_case responses.
 func caseToDetailMap(c *model.Case) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"id":           c.ID,
 		"title":        c.Title,
 		"description":  c.Description,
@@ -342,6 +386,10 @@ func caseToDetailMap(c *model.Case) map[string]any {
 		"assignee_ids": c.AssigneeIDs,
 		"field_values": renderFieldValues(c.FieldValues),
 	}
+	if c.DueDate != nil {
+		out["due_date"] = c.DueDateString()
+	}
+	return out
 }
 
 // actionToListMap renders an Action as a compact map for case__list_actions entries.
@@ -608,7 +656,7 @@ type createCaseTool struct {
 }
 
 func (t *createCaseTool) Spec() gollem.ToolSpec {
-	return gollem.ToolSpec{
+	spec := gollem.ToolSpec{
 		Name:        "case__create_case",
 		Description: "Create a new case in the current workspace.",
 		Parameters: map[string]*gollem.Parameter{
@@ -633,6 +681,10 @@ func (t *createCaseTool) Spec() gollem.ToolSpec {
 			},
 		},
 	}
+	if t.deps.DueDateEnabled {
+		spec.Parameters["due_date"] = dueDateParameter(false)
+	}
+	return spec
 }
 
 func (t *createCaseTool) Run(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -669,9 +721,14 @@ func (t *createCaseTool) Run(ctx context.Context, args map[string]any) (map[stri
 
 	isPrivate, _ := args["is_private"].(bool)
 
+	dueDate, _, err := t.deps.readDueDate(args)
+	if err != nil {
+		return nil, err
+	}
+
 	tool.Update(ctx, fmt.Sprintf("Creating case: %s", title))
 
-	created, err := t.deps.CaseUC.CreateCase(ctx, t.deps.WorkspaceID, title, description, assigneeIDs, fieldValues, isPrivate)
+	created, err := t.deps.CaseUC.CreateCase(ctx, t.deps.WorkspaceID, title, description, assigneeIDs, fieldValues, isPrivate, dueDate)
 	if err != nil {
 		return nil, goerr.Wrap(err, "failed to create case", goerr.V("workspace_id", t.deps.WorkspaceID))
 	}
@@ -684,9 +741,13 @@ type updateCaseTool struct {
 }
 
 func (t *updateCaseTool) Spec() gollem.ToolSpec {
-	return gollem.ToolSpec{
+	editable := "title, description, or custom field values"
+	if t.deps.DueDateEnabled {
+		editable = "title, description, due date, or custom field values"
+	}
+	spec := gollem.ToolSpec{
 		Name: "case__update_case",
-		Description: "Update a case's title, description, or custom field values. " +
+		Description: "Update a case's " + editable + ". " +
 			"This tool cannot change the case status (use case__close_case) or its " +
 			"assignees (use case__assign / case__unassign). Submit only the fields " +
 			"you intend to change; omit the rest to preserve them.",
@@ -707,6 +768,10 @@ func (t *updateCaseTool) Spec() gollem.ToolSpec {
 			"fields": fieldsParameter(),
 		},
 	}
+	if t.deps.DueDateEnabled {
+		spec.Parameters["due_date"] = dueDateParameter(true)
+	}
+	return spec
 }
 
 func (t *updateCaseTool) Run(ctx context.Context, args map[string]any) (map[string]any, error) {
@@ -752,8 +817,18 @@ func (t *updateCaseTool) Run(ctx context.Context, args map[string]any) (map[stri
 		hasUpdate = true
 	}
 
+	due, duePresent, err := t.deps.readDueDate(args)
+	if err != nil {
+		return nil, err
+	}
+	if duePresent {
+		patch.DueDate = due
+		patch.ClearDueDate = due == nil
+		hasUpdate = true
+	}
+
 	if !hasUpdate {
-		return nil, goerr.New("update_case requires at least one of title, description, fields")
+		return nil, goerr.New("update_case requires at least one of title, description, fields, due_date")
 	}
 
 	tool.Update(ctx, fmt.Sprintf("Updating case #%d...", caseID))

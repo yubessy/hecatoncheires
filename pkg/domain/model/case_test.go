@@ -462,3 +462,30 @@ func TestCaseUnassignUsers(t *testing.T) {
 		gt.Array(t, c.AssigneeIDs).Length(0)
 	})
 }
+
+func TestCase_DueDateString(t *testing.T) {
+	var nilCase *model.Case
+	gt.Value(t, nilCase.DueDateString()).Equal("")
+	gt.Value(t, (&model.Case{}).DueDateString()).Equal("")
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	gt.Value(t, (&model.Case{DueDate: &due}).DueDateString()).Equal("2030-06-30")
+	// Rendered in UTC regardless of the stored location.
+	tokyo := time.FixedZone("UTC+9", 9*60*60)
+	shifted := time.Date(2030, 7, 1, 8, 0, 0, 0, tokyo)
+	gt.Value(t, (&model.Case{DueDate: &shifted}).DueDateString()).Equal("2030-06-30")
+}
+
+func TestParseCaseDueDate(t *testing.T) {
+	got, err := model.ParseCaseDueDate("2030-06-30")
+	gt.NoError(t, err).Required()
+	gt.Bool(t, got.Equal(time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC))).True()
+
+	got, err = model.ParseCaseDueDate("2030-06-30T12:00:00Z")
+	gt.NoError(t, err).Required()
+	gt.Bool(t, got.Equal(time.Date(2030, 6, 30, 12, 0, 0, 0, time.UTC))).True()
+
+	for _, bad := range []string{"", "tomorrow", "2030/06/30", "2030-13-01"} {
+		_, err := model.ParseCaseDueDate(bad)
+		gt.Value(t, err).NotNil()
+	}
+}

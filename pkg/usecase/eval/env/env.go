@@ -528,6 +528,8 @@ func buildJobRunner(
 			CaseID:      caseID,
 			Schema:      fieldSchema,
 			StatusSet:   caseStatusSet,
+
+			DueDateEnabled: ws.DueDateEnabled(),
 		})...)
 		if ws != nil && ws.MemoConfig.Enabled() {
 			out = append(out, memotool.New(memotool.Deps{

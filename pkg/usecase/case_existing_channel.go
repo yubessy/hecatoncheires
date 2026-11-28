@@ -22,6 +22,19 @@ type createCaseOptions struct {
 	// existingSlackChannelSet distinguishes WithExistingSlackChannel("") —
 	// an invalid request — from no option at all.
 	existingSlackChannelSet bool
+	// dueDate is the built-in due date the new Case starts with; nil leaves
+	// it unset. See WithCaseDueDate.
+	dueDate *time.Time
+}
+
+// WithCaseDueDate gives the new Case (CreateCase) or draft (CreateDraft) the
+// built-in due date. A nil dueDate is the same as omitting the option. A
+// non-nil one is rejected with ErrCaseDueDateDisabled unless the workspace
+// enables [case] due_date.
+func WithCaseDueDate(dueDate *time.Time) CreateCaseOption {
+	return func(o *createCaseOptions) {
+		o.dueDate = dueDate
+	}
 }
 
 // WithExistingSlackChannel makes CreateCase link the new case to an existing
@@ -60,7 +73,7 @@ func (uc *CaseUseCase) ExistingSlackChannelAllowed(workspaceID string) bool {
 // Every check that can fail without a side effect runs before the bot joins
 // the channel, and the case is persisted only after the channel passed all of
 // them, so a rejected request leaves no case behind.
-func (uc *CaseUseCase) createCaseInExistingSlackChannel(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string, channelID string) (*model.Case, error) {
+func (uc *CaseUseCase) createCaseInExistingSlackChannel(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, isTest bool, sourceTeamID string, requestKey string, channelID string, dueDate *time.Time) (*model.Case, error) {
 	if !uc.ExistingSlackChannelAllowed(workspaceID) {
 		return nil, goerr.Wrap(ErrExistingSlackChannelDisabled, "existing slack channel requested",
 			goerr.V("workspace_id", workspaceID))
@@ -90,7 +103,7 @@ func (uc *CaseUseCase) createCaseInExistingSlackChannel(ctx context.Context, wor
 	if err != nil {
 		return nil, err
 	}
-	return uc.createChannelModeCase(ctx, workspaceID, entry, title, description, assigneeIDs, fieldValues, info.IsPrivate, isTest, sourceTeamID, requestKey, channelID)
+	return uc.createChannelModeCase(ctx, workspaceID, entry, title, description, assigneeIDs, fieldValues, info.IsPrivate, isTest, sourceTeamID, requestKey, channelID, dueDate)
 }
 
 // validateExistingSlackChannel checks that channelID can become a case channel

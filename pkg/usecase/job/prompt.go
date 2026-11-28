@@ -265,9 +265,14 @@ type systemPromptCase struct {
 	IsPrivate     bool
 	// ArchivedAt is the RFC3339 archive timestamp, or emptyPlaceholder when the
 	// case is not archived.
-	ArchivedAt  string
-	ReporterID  string
-	AssigneeIDs []string
+	ArchivedAt string
+	// ShowsDueDate renders the due_date line: the workspace enables [case]
+	// due_date, or the case still carries one from when it did. DueDate is
+	// then the day (YYYY-MM-DD), or emptyPlaceholder when unset.
+	ShowsDueDate bool
+	DueDate      string
+	ReporterID   string
+	AssigneeIDs  []string
 	// ChannelUserIDs is the case's channel members, already joined into one
 	// comma-separated line, or emptyPlaceholder when there are none.
 	ChannelUserIDs        string
@@ -527,6 +532,10 @@ func buildSystemPromptData(in PromptInputs) systemPromptData {
 		}
 		if c.ArchivedAt != nil {
 			cs.ArchivedAt = c.ArchivedAt.UTC().Format(time.RFC3339)
+		}
+		if in.Workspace.DueDateEnabled() || c.DueDate != nil {
+			cs.ShowsDueDate = true
+			cs.DueDate = orEmptyPlaceholder(c.DueDateString())
 		}
 		if !c.CreatedAt.IsZero() {
 			cs.CreatedAt = c.CreatedAt.UTC().Format(time.RFC3339)

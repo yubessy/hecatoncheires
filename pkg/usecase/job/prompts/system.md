@@ -70,6 +70,9 @@ the case already sits on the status you would move it to.
 - is_test: {{ .IsTest }}
 - is_private: {{ .IsPrivate }}
 - archived_at: {{ .ArchivedAt }}
+{{- if .ShowsDueDate }}
+- due_date: {{ .DueDate }}
+{{- end }}
 {{- if .ReporterID }}
 - reporter: {{ .ReporterID }}
 {{- end }}

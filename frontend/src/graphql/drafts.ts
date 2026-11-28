@@ -34,6 +34,7 @@ export const GET_DRAFTS = gql`
       slackChannelID
       createdAt
       updatedAt
+      dueDate
       fields {
         fieldId
         value

@@ -192,6 +192,7 @@ func toGraphQLCase(c *model.Case, workspaceID string) *graphql1.Case {
 		IsThreadBound:         c.IsThreadBound(),
 		BoardStatus:           boardStatus,
 		ArchivedAt:            c.ArchivedAt,
+		DueDate:               c.DueDate,
 		Fields:                toGraphQLFieldValues(c.FieldValues),
 		AgentAdditionalPrompt: agentPrompt,
 		AgentSourceIDs:        agentSourceIDs,

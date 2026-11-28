@@ -16,6 +16,7 @@ import {
   GET_CASES,
 } from '../graphql/case'
 import { diffAssignees } from '../utils/assignees'
+import { caseDueDatePatch } from '../utils/caseDueDate'
 import { UPDATE_CASE_STATUS } from '../graphql/caseStatus'
 import { DISCARD_DRAFT, GET_DRAFTS } from '../graphql/drafts'
 import { GET_FIELD_CONFIGURATION } from '../graphql/fieldConfiguration'
@@ -28,6 +29,7 @@ import CaseMarkdownFieldSection from '../components/fields/CaseMarkdownFieldSect
 import InlineText from '../components/inline/InlineText'
 import InlineLongText from '../components/inline/InlineLongText'
 import InlineUserSelect from '../components/inline/InlineUserSelect'
+import InlineDate from '../components/inline/InlineDate'
 import FilterDropdown from '../components/FilterDropdown'
 import { useWorkspace } from '../contexts/workspace-context'
 import { useTranslation } from '../i18n'
@@ -341,6 +343,7 @@ export default function CaseDetail() {
 
   const caseLabel = configData?.fieldConfiguration?.labels?.case || 'Case'
   const fields = configData?.fieldConfiguration?.fields || []
+  const dueDateEnabled = !!configData?.fieldConfiguration?.caseDueDateEnabled
   // MARKDOWN fields often hold long text, so they get their own sections in
   // the main column below the description instead of a cramped sidebar row.
   const markdownFields = fields.filter((f: any) => f.type === 'MARKDOWN')
@@ -407,6 +410,11 @@ export default function CaseDetail() {
     if (next === (c.description || '')) return
     await updateCase({
       variables: { workspaceId: currentWorkspace!.id, input: { id: caseId, description: next } },
+    })
+  }
+  const handleDueDateChange = async (next: string | null) => {
+    await updateCase({
+      variables: { workspaceId: currentWorkspace!.id, input: { id: caseId, ...caseDueDatePatch(next) } },
     })
   }
   const handleTestChange = async (next: boolean) => {
@@ -1034,6 +1042,26 @@ export default function CaseDetail() {
             />
           </section>
 
+          {/* The built-in due date: shown when the workspace enables [case]
+              due_date, and also for a case that kept one from when it did, so
+              the value never silently disappears. Clearing it is always
+              allowed; setting it is offered only while the option is on. */}
+          {(dueDateEnabled || c.dueDate) && (
+            <section className="h-aside-section" data-testid="case-due-date-section">
+              <div className="h-aside-h">
+                <span className="h-aside-title">{t('labelDueDate')}</span>
+              </div>
+              <InlineDate
+                value={c.dueDate ?? null}
+                onSave={handleDueDateChange}
+                ariaLabel={t('labelDueDate')}
+                placeholder={t('placeholderAddValue')}
+                disabled={editDisabled}
+                testId="case-due-date"
+              />
+            </section>
+          )}
+
           {(c.reporter || c.reporterID) && (
             <section className="h-aside-section" data-testid="case-reporter-section">
               <div className="h-aside-h">
@@ -1176,6 +1204,7 @@ export default function CaseDetail() {
             description: c.description ?? '',
             isPrivate: !!c.isPrivate,
             isTest: !!c.isTest,
+            dueDate: c.dueDate ?? null,
             assigneeIDs: c.assigneeIDs ?? [],
             fields: (c.fields ?? []).map((f: any) => ({ fieldId: f.fieldId, value: f.value })),
             status: 'DRAFT',

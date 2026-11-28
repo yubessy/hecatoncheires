@@ -18,6 +18,7 @@ import { IconLock, IconFlask } from '../components/Icons'
 import { sanitizeFieldValues } from '../utils/sanitizeFieldValues'
 import { displayName } from '../utils/user'
 import { graphQLErrorsFromApolloError } from '../utils/graphqlErrors'
+import { caseDueDateCreate, caseDueDatePatch, dueDateDay } from '../utils/caseDueDate'
 
 interface CaseItem {
   id: number
@@ -25,6 +26,8 @@ interface CaseItem {
   description: string
   isPrivate: boolean
   isTest?: boolean
+  // dueDate is the built-in due date (ISO timestamp), null when unset.
+  dueDate?: string | null
   assigneeIDs: string[]
   fields: Array<{ fieldId: string; value: any }>
   // Drives the footer button set. `'DRAFT'` switches to the Save / Submit
@@ -79,6 +82,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
   const [description, setDescription] = useState(caseItem?.description || '')
   const [isPrivate, setIsPrivate] = useState(caseItem?.isPrivate ?? false)
   const [isTest, setIsTest] = useState(caseItem?.isTest ?? false)
+  const [dueDate, setDueDate] = useState(dueDateDay(caseItem?.dueDate))
   const [assigneeIDs, setAssigneeIDs] = useState<string[]>(caseItem?.assigneeIDs || [])
   const [fieldValues, setFieldValues] = useState<Record<string, any>>(() => {
     const map: Record<string, any> = {}
@@ -101,6 +105,9 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
   const showChannelSource =
     !isEdit && showPrivateToggle && !!configData?.fieldConfiguration?.allowExistingSlackChannel
   const usingExistingChannel = showChannelSource && channelSource === 'existing'
+  // The built-in due date input appears only for a workspace that enables
+  // [case] due_date; the mutations send no due date otherwise.
+  const dueDateEnabled = !!configData?.fieldConfiguration?.caseDueDateEnabled
   const { users } = useAssigneeCandidates(currentWorkspace?.id)
 
   const [createCase, { loading: creating }] = useMutation(CREATE_CASE, {
@@ -200,6 +207,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
               description,
               isTest,
               fields: fieldArr,
+              ...(dueDateEnabled ? caseDueDatePatch(dueDate) : {}),
             },
           },
         })
@@ -215,13 +223,17 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
               description,
               isTest,
               fields: fieldArr,
+              ...(dueDateEnabled ? caseDueDatePatch(dueDate) : {}),
             },
           },
         })
         await reconcileAssignees(caseItem.id)
         onClose()
       } else {
-        const common = { title, description, isTest, assigneeIDs, fields: fieldArr }
+        const common = {
+          title, description, isTest, assigneeIDs, fields: fieldArr,
+          ...(dueDateEnabled ? caseDueDateCreate(dueDate) : {}),
+        }
         await createCase({
           variables: {
             workspaceId: currentWorkspace!.id,
@@ -265,6 +277,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
             description,
             isTest,
             fields: fieldArr,
+            ...(dueDateEnabled ? caseDueDatePatch(dueDate) : {}),
           },
         },
       })
@@ -295,6 +308,7 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
             isTest,
             assigneeIDs,
             fields: fieldArr,
+            ...(dueDateEnabled ? caseDueDateCreate(dueDate) : {}),
           },
         },
       })
@@ -404,6 +418,20 @@ export default function CaseForm({ caseItem, onClose, onSubmitted }: CaseFormPro
             placeholder={t('placeholderSelectAssignees')}
           />
         </div>
+        {dueDateEnabled && (
+          <div>
+            <label htmlFor="case-due-date" className="field-label">{t('labelDueDate')}</label>
+            <input
+              id="case-due-date"
+              type="date"
+              className="input"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              disabled={busy}
+              data-testid="case-due-date-input"
+            />
+          </div>
+        )}
         {fields.length > 0 && (
           <div>
             <div className="field-label">{t('sectionFields')}</div>
