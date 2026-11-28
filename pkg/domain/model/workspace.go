@@ -85,6 +85,10 @@ type WorkspaceEntry struct {
 	// workspace have Actions. Default false. Meaningless in channel mode, where
 	// Cases always have Actions; read it through ActionsEnabled.
 	CaseActions bool
+	// CaseDueDate is [case] due_date: whether the workspace's Cases carry the
+	// built-in due date (Case.DueDate). Default false; valid in both modes.
+	// Read it through DueDateEnabled.
+	CaseDueDate bool
 	// ReactionEmoji is the Slack reaction (emoji name, without surrounding
 	// colons) that triggers case creation for this workspace. Empty when the
 	// reaction trigger is disabled. Only meaningful in thread mode, and unique
@@ -132,6 +136,13 @@ func (e *WorkspaceEntry) IsThreadMode() bool {
 // entry (an unregistered workspace) reads as channel mode, the default.
 func (e *WorkspaceEntry) ActionsEnabled() bool {
 	return !e.IsThreadMode() || e.CaseActions
+}
+
+// DueDateEnabled reports whether this workspace's Cases carry the built-in
+// due date ([case] due_date). A nil entry (an unregistered workspace) reads as
+// disabled, the default.
+func (e *WorkspaceEntry) DueDateEnabled() bool {
+	return e != nil && e.CaseDueDate
 }
 
 // WorkspaceRegistry holds workspace configurations.

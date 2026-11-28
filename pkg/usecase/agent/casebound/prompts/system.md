@@ -24,6 +24,9 @@ target to read the conversation; never invent a channel id or a timestamp.
 - Title: {{.Case.Title}}
 - Description: {{.Case.Description}}
 - Status: {{.Case.Status}}
+{{- if .ShowsDueDate }}
+- Due date (YYYY-MM-DD): {{if .DueDate}}{{.DueDate}}{{else}}(not set){{end}}
+{{- end}}
 {{if .Fields}}
 
 ## Case Fields

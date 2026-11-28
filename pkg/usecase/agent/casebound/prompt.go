@@ -94,11 +94,16 @@ type promptData struct {
 	// because the agent holds slack__get_messages, whose targets take a
 	// (channel_id, ts) pair: without the ts it has to invent one, and the tool
 	// rejects the call or looks up a message that does not exist.
-	ThreadTS    string
-	Now         string
-	Case        *model.Case
-	Fields      []promptField
-	FieldSchema []promptFieldDef
+	ThreadTS string
+	Now      string
+	Case     *model.Case
+	// ShowsDueDate renders the case's due date line: the workspace enables
+	// [case] due_date, or the case still carries one from when it did.
+	// DueDate is the day, or empty when unset.
+	ShowsDueDate bool
+	DueDate      string
+	Fields       []promptField
+	FieldSchema  []promptFieldDef
 	// MemoDefinition and MemoFieldSchema describe the workspace's memos. The
 	// memo__* tools reach this agent whenever memos are enabled, and their
 	// `fields` parameter points here for the field ids and value shapes.
@@ -144,6 +149,10 @@ func buildSystemPrompt(c *model.Case, entry *model.WorkspaceEntry, channelID, th
 		data.Language = i18n.LanguageLabelOf(entry.Language)
 		data.WorkspaceDescription = strings.TrimSpace(entry.Workspace.Description)
 		data.MentionPrompt = strings.TrimSpace(entry.CaseMentionPrompt)
+	}
+	if entry.DueDateEnabled() || c.DueDate != nil {
+		data.ShowsDueDate = true
+		data.DueDate = c.DueDateString()
 	}
 
 	if entry != nil && entry.FieldSchema != nil && len(c.FieldValues) > 0 {

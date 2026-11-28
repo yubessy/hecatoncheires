@@ -43,6 +43,7 @@ func caseRows(ctx context.Context, schema *config.FieldSchema, cases []*model.Ca
 			"is_test":          c.IsTest,
 			"request_key":      c.RequestKey,
 			"archived_at":      c.ArchivedAt,
+			"due_date":         c.DueDate,
 			"created_at":       c.CreatedAt,
 			"updated_at":       c.UpdatedAt,
 		}
@@ -491,6 +492,7 @@ func fixedCaseColumns() []Column {
 		{Name: "is_test", Type: TypeBool, Nullable: true},
 		{Name: "request_key", Type: TypeString, Nullable: true},
 		{Name: "archived_at", Type: TypeTimestamp, Nullable: true},
+		{Name: "due_date", Type: TypeTimestamp, Nullable: true},
 		{Name: "created_at", Type: TypeTimestamp, Nullable: true},
 		{Name: "updated_at", Type: TypeTimestamp, Nullable: true},
 	}

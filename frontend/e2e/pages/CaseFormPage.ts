@@ -99,6 +99,16 @@ export class CaseFormPage extends BasePage {
   }
 
   /**
+   * Set the built-in due date (YYYY-MM-DD); an empty string clears it. The
+   * input is shown only for a workspace with [case] due_date enabled.
+   */
+  async fillDueDate(day: string): Promise<void> {
+    const input = this.page.getByTestId('case-due-date-input');
+    await input.waitFor({ state: 'visible', timeout: 5000 });
+    await input.fill(day);
+  }
+
+  /**
    * Toggle the "Private case" checkbox (shown only on the create form) to the
    * desired checked state.
    */
@@ -228,6 +238,7 @@ export class CaseFormPage extends BasePage {
     customFields?: Record<string, string>;
     isTest?: boolean;
     isPrivate?: boolean;
+    dueDate?: string;
   }): Promise<void> {
     await this.waitForFormVisible();
     await this.fillTitle(data.title);
@@ -248,6 +259,10 @@ export class CaseFormPage extends BasePage {
 
     if (data.isPrivate) {
       await this.setPrivate(true);
+    }
+
+    if (data.dueDate) {
+      await this.fillDueDate(data.dueDate);
     }
 
     await this.submit();

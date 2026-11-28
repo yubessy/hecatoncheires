@@ -571,6 +571,9 @@ func (r *mutationResolver) CreateCase(ctx context.Context, workspaceID string, i
 		}
 		opts = append(opts, usecase.WithExistingSlackChannel(*input.ExistingSlackChannelID))
 	}
+	if input.DueDate != nil {
+		opts = append(opts, usecase.WithCaseDueDate(input.DueDate))
+	}
 	created, err := r.UseCases.Case.CreateCase(ctx, workspaceID, input.Title, description, assigneeIDs, fieldValues, isPrivate, isTest, "", "", opts...)
 	if err != nil {
 		return nil, err
@@ -582,9 +585,11 @@ func (r *mutationResolver) CreateCase(ctx context.Context, workspaceID string, i
 // UpdateCase is the resolver for the updateCase field.
 func (r *mutationResolver) UpdateCase(ctx context.Context, workspaceID string, input graphql1.UpdateCaseInput) (*graphql1.Case, error) {
 	patch := usecase.CaseUpdate{
-		Title:       input.Title,
-		Description: input.Description,
-		IsTest:      input.IsTest,
+		Title:        input.Title,
+		Description:  input.Description,
+		IsTest:       input.IsTest,
+		DueDate:      input.DueDate,
+		ClearDueDate: input.ClearDueDate != nil && *input.ClearDueDate,
 	}
 	if input.Fields != nil {
 		patch.Fields = toDomainFieldValues(input.Fields)
@@ -748,7 +753,11 @@ func (r *mutationResolver) CreateDraft(ctx context.Context, workspaceID string, 
 	isPrivate := input.IsPrivate != nil && *input.IsPrivate
 	isTest := input.IsTest != nil && *input.IsTest
 
-	created, err := r.UseCases.Case.CreateDraft(ctx, workspaceID, title, description, assigneeIDs, fieldValues, isPrivate, isTest)
+	var opts []usecase.CreateCaseOption
+	if input.DueDate != nil {
+		opts = append(opts, usecase.WithCaseDueDate(input.DueDate))
+	}
+	created, err := r.UseCases.Case.CreateDraft(ctx, workspaceID, title, description, assigneeIDs, fieldValues, isPrivate, isTest, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -772,6 +781,8 @@ func (r *mutationResolver) SubmitDraft(ctx context.Context, workspaceID string, 
 		if input.IsTest != nil {
 			p.IsTest = input.IsTest
 		}
+		p.DueDate = input.DueDate
+		p.ClearDueDate = input.ClearDueDate != nil && *input.ClearDueDate
 		patch = &p
 	}
 	submitted, err := r.UseCases.Case.SubmitDraft(ctx, workspaceID, int64(id), patch)
@@ -1640,6 +1651,7 @@ func (r *queryResolver) FieldConfiguration(ctx context.Context, workspaceID stri
 		},
 		ActionConfig:              toActionConfig(statusSet),
 		AllowExistingSlackChannel: r.UseCases.Case.ExistingSlackChannelAllowed(workspaceID),
+		CaseDueDateEnabled:        r.UseCases.Case.DueDateEnabled(ctx, workspaceID),
 	}, nil
 }
 
@@ -2092,3 +2104,15 @@ type (
 	mutationResolver      struct{ *Resolver }
 	queryResolver         struct{ *Resolver }
 )
+
+// !!! WARNING !!!
+// The code below was going to be deleted when updating resolvers. It has been copied here so you have
+// one last chance to move it out of harms way if you want. There are two reasons this happens:
+//  - When renaming or deleting a resolver the old code will be put in here. You can safely delete
+//    it when you're done.
+//  - You have helper methods in this file. Move them out to keep these resolver files clean.
+/*
+	func (r *caseResolver) DueDate(ctx context.Context, obj *graphql1.Case) (*time.Time, error) {
+	panic(fmt.Errorf("not implemented: DueDate - dueDate"))
+}
+*/

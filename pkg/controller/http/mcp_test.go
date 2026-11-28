@@ -275,6 +275,46 @@ func TestMCP_GetCases_OmitsPrivateAndMissing(t *testing.T) {
 	gt.Value(t, out.Cases[0].Description).Equal("Desc")
 }
 
+func TestMCP_GetCases_DueDate(t *testing.T) {
+	env := newMCPTestEnv(t, allowAsMember())
+	ctx := context.Background()
+
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	withDue, err := env.repo.Case().Create(ctx, testWorkspaceID, &model.Case{
+		ReporterID:  "UMEMBER",
+		Title:       "Sample case with due date",
+		Status:      types.CaseStatusOpen,
+		DueDate:     &due,
+		AssigneeIDs: []string{},
+	})
+	gt.NoError(t, err).Required()
+
+	res := env.callTool(t, "hecaton_get_cases", map[string]any{
+		"workspace_id": testWorkspaceID,
+		"ids":          []int64{withDue.ID, env.publicCase.ID},
+	})
+	gt.Bool(t, res.IsError).False()
+
+	var out struct {
+		Cases []struct {
+			ID      int64   `json:"id"`
+			DueDate *string `json:"due_date"`
+		} `json:"cases"`
+	}
+	decodeStructured(t, res, &out)
+	gt.Array(t, out.Cases).Length(2).Required()
+	for _, c := range out.Cases {
+		switch c.ID {
+		case withDue.ID:
+			gt.Value(t, c.DueDate).NotNil().Required()
+			gt.Value(t, *c.DueDate).Equal("2030-06-30T00:00:00Z")
+		case env.publicCase.ID:
+			// Omitted, not an empty string, for a case with no due date.
+			gt.Value(t, c.DueDate).Nil()
+		}
+	}
+}
+
 func TestMCP_ListActions_ExcludesPrivateCaseActions(t *testing.T) {
 	env := newMCPTestEnv(t, allowAsMember())
 	res := env.callTool(t, "hecaton_list_actions", map[string]any{"workspace_id": testWorkspaceID})

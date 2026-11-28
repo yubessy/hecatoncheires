@@ -76,6 +76,9 @@ type FieldConfiguration {
   # existingSlackChannelID in this workspace: [slack] allow_existing_channel is
   # set, the workspace is in channel mode, and Slack is configured.
   allowExistingSlackChannel: Boolean!
+  # caseDueDateEnabled reports whether the workspace's cases carry the built-in
+  # due date ([case] due_date). Default false; valid in both case modes.
+  caseDueDateEnabled: Boolean!
 }
 
 # SlackChannelCandidate is a Slack channel the acting user may link a new case
@@ -243,6 +246,10 @@ type Case {
   # An archived case is hidden from the default `cases` listing and the Case
   # board, and is reached through the ARCHIVED archive filter.
   archivedAt: Time
+  # dueDate is the built-in due date, null when unset. Offered only when the
+  # workspace enables it (fieldConfiguration.caseDueDateEnabled); a case may
+  # still carry one stored while the option was on.
+  dueDate: Time
   fields: [FieldValue!]!       # Resolved from case_field_values via DataLoader
   # actions exposes the case's actions. The `filter` argument selects which
   # archive slice to return (ACTIVE / ARCHIVED / ALL); the default ACTIVE
@@ -501,6 +508,9 @@ input CreateCaseInput {
   # omitted or null (true and false are both rejected); the case's privacy
   # follows the channel.
   existingSlackChannelID: String
+  # dueDate sets the built-in due date. Rejected unless
+  # fieldConfiguration.caseDueDateEnabled is true.
+  dueDate: Time
 }
 
 # CreateDraftInput mirrors CreateCaseInput but every field is optional —
@@ -515,6 +525,9 @@ input CreateDraftInput {
   isPrivate: Boolean
   # isTest marks the draft as a test case. Defaults to false when omitted.
   isTest: Boolean
+  # dueDate sets the built-in due date. Rejected unless
+  # fieldConfiguration.caseDueDateEnabled is true.
+  dueDate: Time
 }
 
 input UpdateCaseInput {
@@ -529,6 +542,11 @@ input UpdateCaseInput {
   fields: [FieldValueInput!]
   # isTest, when provided, sets the test flag; omit to preserve the current value.
   isTest: Boolean
+  # dueDate, when provided, sets the built-in due date (rejected unless
+  # fieldConfiguration.caseDueDateEnabled is true). clearDueDate: true removes
+  # it and wins over dueDate; it is accepted even when the option is off.
+  dueDate: Time
+  clearDueDate: Boolean
 }
 
 # SubmitDraftInput carries the last-minute edits that the user wants to
@@ -544,6 +562,9 @@ input SubmitDraftInput {
   fields: [FieldValueInput!]
   # isTest, when provided, sets the test flag before the draft is promoted.
   isTest: Boolean
+  # dueDate / clearDueDate behave as in UpdateCaseInput.
+  dueDate: Time
+  clearDueDate: Boolean
 }
 
 input CreateActionInput {

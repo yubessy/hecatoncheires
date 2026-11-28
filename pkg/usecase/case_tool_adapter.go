@@ -30,9 +30,11 @@ func NewCaseToolAdapter(uc *CaseUseCase) casewriter.CaseMutator {
 
 func (a *caseToolAdapter) UpdateCase(ctx context.Context, workspaceID string, id int64, patch casewriter.CaseUpdate) (*model.Case, error) {
 	in := CaseUpdate{
-		Title:       patch.Title,
-		Description: patch.Description,
-		Fields:      patch.Fields,
+		Title:        patch.Title,
+		Description:  patch.Description,
+		Fields:       patch.Fields,
+		DueDate:      patch.DueDate,
+		ClearDueDate: patch.ClearDueDate,
 	}
 	return a.uc.UpdateCase(ctx, workspaceID, id, in)
 }

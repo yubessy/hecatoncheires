@@ -32,6 +32,9 @@ const CASE_MUTATION_FIELDS = gql`
     # mutation fragment (not only the list one) so archiveCase / unarchiveCase
     # refresh the detail page's badge and menu from their own response.
     archivedAt
+    # dueDate is the built-in due date, null when unset. Offered only when
+    # fieldConfiguration.caseDueDateEnabled is true.
+    dueDate
     isPrivate
     isTest
     accessDenied

@@ -91,8 +91,44 @@ type Case struct {
 	// wider archive scope.
 	ArchivedAt *time.Time
 
+	// DueDate is the Case's built-in due date, nil when unset. It is offered
+	// only by a workspace with [case] due_date on (WorkspaceEntry.
+	// DueDateEnabled); a Case stored while the option was off has nil here,
+	// so turning it on later needs no migration. Stored as midnight UTC of
+	// the chosen day, the same convention as Action.DueDate.
+	DueDate *time.Time
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// CaseDueDateLayout is the calendar-day form a Case due date is shown and
+// entered in: Slack's date picker exchanges it, and the agent prompts render
+// it.
+const CaseDueDateLayout = "2006-01-02"
+
+// ParseCaseDueDate reads a due date written as a calendar day
+// (CaseDueDateLayout, stored as midnight UTC like every other entry point) or
+// as an RFC3339 timestamp. It is what the agent tools accept.
+func ParseCaseDueDate(s string) (time.Time, error) {
+	if t, err := time.Parse(CaseDueDateLayout, s); err == nil {
+		return t, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, goerr.Wrap(err, "due date must be YYYY-MM-DD (e.g. 2026-03-01) or RFC3339 (e.g. 2026-03-01T00:00:00Z)",
+			goerr.V("due_date", s))
+	}
+	return t, nil
+}
+
+// DueDateString renders the due date as a calendar day (CaseDueDateLayout) in
+// UTC, or "" when the case has none.
+func (c *Case) DueDateString() string {
+	if c == nil || c.DueDate == nil {
+		return ""
+	}
+	return c.DueDate.UTC().Format(CaseDueDateLayout)
 }
 
 // IsArchived reports whether the case is currently archived.

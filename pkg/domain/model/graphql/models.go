@@ -38,9 +38,11 @@ type Case struct {
 	// ArchivedAt is null for an active case and non-null once archived. No
 	// derived `archived` boolean rides along: a value the client can compute
 	// from archivedAt != null would only give the two fields a way to disagree.
-	ArchivedAt *time.Time    `json:"archivedAt,omitempty"`
-	Fields     []*FieldValue `json:"fields"`
-	Actions    []*Action     `json:"actions"`
+	ArchivedAt *time.Time `json:"archivedAt,omitempty"`
+	// DueDate is the built-in due date, null when unset.
+	DueDate *time.Time    `json:"dueDate,omitempty"`
+	Fields  []*FieldValue `json:"fields"`
+	Actions []*Action     `json:"actions"`
 	// AgentAdditionalPrompt is the Markdown text appended to the agent
 	// system prompt for this Case. Always present (empty string when
 	// unset) so the schema's String! contract is honoured.

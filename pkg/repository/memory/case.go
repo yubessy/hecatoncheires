@@ -87,6 +87,11 @@ func copyCase(c *model.Case) *model.Case {
 		copied.ArchivedAt = &archivedAt
 	}
 
+	if c.DueDate != nil {
+		dueDate := *c.DueDate
+		copied.DueDate = &dueDate
+	}
+
 	// AccessDenied is runtime-only: the usecase sets it on a value it is about
 	// to return, and it is never part of stored state. Clearing it keeps the
 	// stored copy free of a caller's transient flag.

@@ -93,7 +93,8 @@ func ErrorCode(err error) string {
 		errors.Is(err, usecase.ErrInvalidArgument),
 		errors.Is(err, usecase.ErrKnowledgeInput),
 		errors.Is(err, usecase.ErrUnknownTag),
-		errors.Is(err, usecase.ErrCaseActionsDisabled):
+		errors.Is(err, usecase.ErrCaseActionsDisabled),
+		errors.Is(err, usecase.ErrCaseDueDateDisabled):
 		return ErrCodeBadUserInput
 	case errors.Is(err, usecase.ErrCaseNotFound),
 		errors.Is(err, usecase.ErrActionNotFound),

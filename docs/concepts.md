@@ -36,7 +36,8 @@ multiple Workspaces (including Slack Enterprise Grid org-level apps). Defined in
 The central record — a project, incident, or risk item. A Case moves through
 three states: **DRAFT** (work in progress, hidden from the default list), **OPEN**
 (active), and **CLOSED** (resolved). Cases carry custom Field values, Actions,
-Knowledge, and a bound Slack channel. See the
+Knowledge, and a bound Slack channel, plus an optional built-in due date when
+the workspace sets [`[case] due_date`](configuration.md#built-in-case-due-date-case-due_date). See the
 [User Guide](user_guide.md) for the full lifecycle.
 
 ### Field

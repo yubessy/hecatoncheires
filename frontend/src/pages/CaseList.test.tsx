@@ -38,7 +38,7 @@ interface FieldDef {
   options?: { id: string; name: string }[] | null
 }
 
-function fieldConfigMock(workspaceId: string, fields: FieldDef[] = []): MockedResponse {
+function fieldConfigMock(workspaceId: string, fields: FieldDef[] = [], caseDueDateEnabled = false): MockedResponse {
   return {
     request: {
       query: GET_FIELD_CONFIGURATION,
@@ -57,6 +57,7 @@ function fieldConfigMock(workspaceId: string, fields: FieldDef[] = []): MockedRe
             statuses: [],
           },
           allowExistingSlackChannel: false,
+          caseDueDateEnabled,
         },
       },
     },
@@ -83,6 +84,7 @@ interface CaseRowMock {
   isThreadBound: boolean
   boardStatus: string | null
   archivedAt: string | null
+  dueDate?: string | null
   createdAt: string
   updatedAt: string
   fields: Array<{
@@ -240,10 +242,11 @@ function renderAt(
   // Defaults to the channel-mode shape (null), which is also the state the
   // page falls back to while the query is in flight or after it errors.
   statusConfig: StatusConfigMock | null = null,
+  caseDueDateEnabled = false,
 ) {
   const workspaceId = 'risk'
   const mocks: MockedResponse[] = [
-    fieldConfigMock(workspaceId, fields),
+    fieldConfigMock(workspaceId, fields, caseDueDateEnabled),
     caseStatusConfigMock(workspaceId, statusConfig),
     casesMock(workspaceId, 'OPEN', openRows),
     casesMock(workspaceId, 'CLOSED'),
@@ -1344,4 +1347,29 @@ it('renders the stored calendar day and resolves option IDs before legacy labels
   const row = (await screen.findByText('Calendar case')).closest('tr')!
   expect(row).toHaveTextContent('B team')
   expect(row).toHaveTextContent(new Date('2026-10-01T00:00:00Z').toLocaleDateString(undefined, { timeZone: 'UTC' }))
+})
+
+describe('CaseList built-in due date column', () => {
+  const rows = () => [
+    { ...caseRow(1, 'Sample case 1', 'OPEN'), dueDate: '2030-06-30T00:00:00Z' },
+    { ...caseRow(2, 'Sample case 2', 'OPEN'), dueDate: null },
+  ]
+
+  it('shows the due date column when the workspace enables it', async () => {
+    renderAt('/ws/risk/cases', rows(), [], null, true)
+    await screen.findByText('Sample case 1')
+    expect(await screen.findByRole('columnheader', { name: 'Due Date' })).toBeInTheDocument()
+    const cells = screen.getAllByTestId('case-row-due-date')
+    expect(cells).toHaveLength(1)
+    expect(cells[0]).toHaveTextContent(
+      new Date('2030-06-30T00:00:00Z').toLocaleDateString(undefined, { timeZone: 'UTC' }),
+    )
+  })
+
+  it('offers no due date column when the workspace does not enable it', async () => {
+    renderAt('/ws/risk/cases', rows(), [], null, false)
+    await screen.findByText('Sample case 1')
+    expect(screen.queryByRole('columnheader', { name: 'Due Date' })).toBeNull()
+    expect(screen.queryByTestId('case-row-due-date')).toBeNull()
+  })
 })

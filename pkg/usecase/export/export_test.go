@@ -592,6 +592,41 @@ func TestExporter_Run_includesArchivedCases(t *testing.T) {
 	gt.Value(t, normalRow["archived_at"]).Nil()
 }
 
+// The built-in case due date is exported as its own column, null for a case
+// that has none.
+func TestExporter_Run_exportsCaseDueDate(t *testing.T) {
+	ctx := context.Background()
+	repo, entry, wsID, normalID, _, _ := seededWorkspace(t)
+
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	withDue, err := repo.Case().Create(ctx, wsID, &model.Case{
+		ReporterID: "U-REPORTER",
+		Title:      "Sample case with due date",
+		Status:     types.CaseStatusOpen,
+		DueDate:    &due,
+		CreatedAt:  time.Now().UTC(),
+		UpdatedAt:  time.Now().UTC(),
+	})
+	gt.NoError(t, err).Required()
+
+	sink := newFakeSink()
+	gt.NoError(t, export.New(repo, sink).Run(ctx, []export.Target{{Entry: entry, Namespace: "ds"}})).Required()
+
+	cases := sink.table("ds", "cases")
+	gt.True(t, hasColumn(cases, "due_date"))
+
+	row := findRow(cases, "id", withDue.ID)
+	gt.Value(t, row).NotNil().Required()
+	got, ok := row["due_date"].(*time.Time)
+	gt.Bool(t, ok).True().Required()
+	gt.Value(t, got).NotNil().Required()
+	gt.Bool(t, got.Equal(due)).True()
+
+	normalRow := findRow(cases, "id", normalID)
+	gt.Value(t, normalRow).NotNil().Required()
+	gt.Value(t, normalRow["due_date"]).Nil()
+}
+
 func TestExporter_Run_collectsErrorsAndContinues(t *testing.T) {
 	ctx := context.Background()
 	repo, entry, _, _, _, _ := seededWorkspace(t)

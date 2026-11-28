@@ -108,6 +108,15 @@ var (
 	// is covered, not just the Web UI that hides the section.
 	ErrCaseActionsDisabled = errors.New("actions are not enabled for this thread-mode workspace")
 
+	// ErrCaseDueDateDisabled is returned by every Case write path that would
+	// set the built-in due date (CreateCase, CreateDraft, UpdateCase,
+	// SubmitDraft) when the workspace has not enabled it with [case] due_date.
+	// Clearing a due date is always allowed, so a Case that kept one from
+	// before the option was turned off can still be cleaned up. Enforced at the
+	// usecase boundary so every entry point (GraphQL, Slack, agent tools) is
+	// covered, not just the UIs that hide the input.
+	ErrCaseDueDateDisabled = errors.New("the built-in due date is not enabled for this workspace")
+
 	// Existing Slack channel errors (case creation linking an existing channel)
 	//
 	// ErrExistingSlackChannelDisabled is returned when an existing channel is

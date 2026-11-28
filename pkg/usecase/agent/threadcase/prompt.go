@@ -91,7 +91,12 @@ type systemPromptCase struct {
 	// tell "no assignees" from "not shown" before calling case__assign.
 	Assignees   string
 	BoardStatus string
-	FieldValues []systemPromptFieldValue
+	// ShowsDueDate renders the due date line: the workspace enables [case]
+	// due_date, or the case still carries one from when it did. DueDate is
+	// then the day, or "(empty)" when unset.
+	ShowsDueDate bool
+	DueDate      string
+	FieldValues  []systemPromptFieldValue
 }
 
 type systemPromptFieldValue struct {
@@ -170,6 +175,10 @@ func buildSystemPrompt(c *model.Case, ws *model.WorkspaceEntry, mode Mode, creat
 			Description: orPlaceholder(c.Description),
 			Assignees:   orPlaceholder(strings.Join(c.AssigneeIDs, ", ")),
 			BoardStatus: c.BoardStatus,
+		}
+		if ws.DueDateEnabled() || c.DueDate != nil {
+			pc.ShowsDueDate = true
+			pc.DueDate = orPlaceholder(c.DueDateString())
 		}
 		for _, id := range slices.Sorted(maps.Keys(c.FieldValues)) {
 			pc.FieldValues = append(pc.FieldValues, systemPromptFieldValue{ID: id, Value: c.FieldValues[id].Value})

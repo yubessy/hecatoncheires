@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"time"
 
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/casemulti"
 	"github.com/m-mizutani/hecatoncheires/pkg/domain/interfaces"
@@ -54,15 +55,17 @@ func (a *caseMultiCaseAdapter) GetCase(ctx context.Context, workspaceID string, 
 // agent-tool creation has no Slack-modal double-submit to dedup, mirroring the
 // GraphQL mutation's call site. The reporter is derived from the ctx auth token
 // the host injects.
-func (a *caseMultiCaseAdapter) CreateCase(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool) (*model.Case, error) {
-	return a.uc.CreateCase(ctx, workspaceID, title, description, assigneeIDs, fieldValues, isPrivate, false, "", "")
+func (a *caseMultiCaseAdapter) CreateCase(ctx context.Context, workspaceID string, title, description string, assigneeIDs []string, fieldValues map[string]model.FieldValue, isPrivate bool, dueDate *time.Time) (*model.Case, error) {
+	return a.uc.CreateCase(ctx, workspaceID, title, description, assigneeIDs, fieldValues, isPrivate, false, "", "", WithCaseDueDate(dueDate))
 }
 
 func (a *caseMultiCaseAdapter) UpdateCase(ctx context.Context, workspaceID string, id int64, patch casemulti.CaseUpdate) (*model.Case, error) {
 	return a.uc.UpdateCase(ctx, workspaceID, id, CaseUpdate{
-		Title:       patch.Title,
-		Description: patch.Description,
-		Fields:      patch.Fields,
+		Title:        patch.Title,
+		Description:  patch.Description,
+		Fields:       patch.Fields,
+		DueDate:      patch.DueDate,
+		ClearDueDate: patch.ClearDueDate,
 	})
 }
 

@@ -853,8 +853,10 @@ func runCaseRepositoryTest(t *testing.T, newRepo func(t *testing.T) interfaces.R
 
 		created := time.Now().UTC().Truncate(time.Second)
 		archivedAt := created.Add(time.Hour)
+		dueDate := time.Date(2030, 4, 1, 0, 0, 0, 0, time.UTC)
 		threadTS := fmt.Sprintf("%d.000777", time.Now().UnixNano())
 		want := &model.Case{
+			DueDate:               &dueDate,
 			ReporterID:            "U-REPORTER",
 			AssigneeIDs:           []string{"U-A1", "U-A2"},
 			CreatedAt:             created,
@@ -906,6 +908,8 @@ func runCaseRepositoryTest(t *testing.T, newRepo func(t *testing.T) interfaces.R
 		gt.Value(t, got.ArchivedAt).NotNil().Required()
 		gt.Bool(t, got.ArchivedAt.Equal(archivedAt)).True()
 		gt.Bool(t, got.IsArchived()).True()
+		gt.Value(t, got.DueDate).NotNil().Required()
+		gt.Bool(t, got.DueDate.Equal(dueDate)).True()
 
 		fv, ok := got.FieldValues["severity"]
 		gt.Bool(t, ok).True().Required()
@@ -1441,6 +1445,9 @@ func runCaseRepositoryTest(t *testing.T, newRepo func(t *testing.T) interfaces.R
 		gt.NoError(t, err).Required()
 		gt.Value(t, got.ArchivedAt).Nil()
 		gt.Bool(t, got.IsArchived()).False()
+		// Likewise a case stored before the built-in due date existed (or
+		// while [case] due_date was off) reads back with no due date.
+		gt.Value(t, got.DueDate).Nil()
 
 		listed, err := repo.Case().List(ctx, wsID)
 		gt.NoError(t, err).Required()
@@ -1475,6 +1482,40 @@ func runCaseRepositoryTest(t *testing.T, newRepo func(t *testing.T) interfaces.R
 		gt.NoError(t, err).Required()
 		gt.Value(t, got.ArchivedAt).Nil()
 		gt.Bool(t, got.IsArchived()).False()
+	})
+
+	t.Run("Update sets and clears DueDate", func(t *testing.T) {
+		repo := newRepo(t)
+		wsID := fmt.Sprintf("ws-%d", time.Now().UnixNano())
+		ctx := context.Background()
+
+		now := time.Now().UTC().Truncate(time.Second)
+		created, err := repo.Case().Create(ctx, wsID, &model.Case{
+			ReporterID: "U-DUE",
+			CreatedAt:  now,
+			UpdatedAt:  now,
+			Title:      "Due Date Case",
+			Status:     types.CaseStatusOpen,
+		})
+		gt.NoError(t, err).Required()
+
+		due := time.Date(2031, 1, 15, 0, 0, 0, 0, time.UTC)
+		created.DueDate = &due
+		_, err = repo.Case().Update(ctx, wsID, created)
+		gt.NoError(t, err).Required()
+
+		got, err := repo.Case().Get(ctx, wsID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, got.DueDate).NotNil().Required()
+		gt.Bool(t, got.DueDate.Equal(due)).True()
+
+		got.DueDate = nil
+		_, err = repo.Case().Update(ctx, wsID, got)
+		gt.NoError(t, err).Required()
+
+		got, err = repo.Case().Get(ctx, wsID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, got.DueDate).Nil()
 	})
 
 	t.Run("ListDrafts returns every draft in the workspace regardless of reporter", func(t *testing.T) {

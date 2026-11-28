@@ -144,7 +144,7 @@ func (t *getReferenceableCasesTool) Run(ctx context.Context, args map[string]any
 		if err != nil {
 			return nil, goerr.Wrap(err, "render referenced case field values", goerr.V("case_id", c.ID))
 		}
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"id":           c.ID,
 			"title":        c.Title,
 			"description":  c.Description,
@@ -154,7 +154,11 @@ func (t *getReferenceableCasesTool) Run(ctx context.Context, args map[string]any
 			"field_values": fieldValues,
 			"created_at":   c.CreatedAt.Format(time.RFC3339),
 			"updated_at":   c.UpdatedAt.Format(time.RFC3339),
-		})
+		}
+		if c.DueDate != nil {
+			item["due_date"] = c.DueDateString()
+		}
+		items = append(items, item)
 	}
 
 	notFound := make([]int64, 0)

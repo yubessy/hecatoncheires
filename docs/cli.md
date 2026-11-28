@@ -485,6 +485,12 @@ They are **not detected** — which is different from not implemented:
   the existing-channel picker stores (`slackMemberChannels`) are not checked:
   they hold what Slack returned, no configuration value, and the picker
   refetches a list older than 10 minutes.
+- **A Case due date stored while `[case] due_date` is off.** Turning the
+  option off keeps the due dates already stored: the case detail page and the
+  agent prompts still show them, and every entry point can still clear them,
+  so such a Case is neither invisible nor stuck. That is the same acceptance
+  as for a removed field definition. A due date itself has no configured
+  vocabulary for a later config change to invalidate.
 - **`[authz]` workspace policies.** A policy decides who may access a workspace
   at request time; no stored entity records that decision or any value derived
   from the policy. Changing the policy therefore cannot leave persisted data

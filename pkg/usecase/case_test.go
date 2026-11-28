@@ -6082,3 +6082,216 @@ func TestCaseUseCase_ThreadChangeNotification(t *testing.T) {
 		gt.Array(t, slackMock.threadCalls).Length(0)
 	})
 }
+
+// TestCaseUseCase_DueDate covers the built-in Case due date across every write
+// path, gated by [case] due_date (WorkspaceEntry.CaseDueDate).
+func TestCaseUseCase_DueDate(t *testing.T) {
+	newUC := func(t *testing.T, enabled bool) (*usecase.CaseUseCase, *memory.Memory) {
+		t.Helper()
+		repo := memory.New()
+		registry := model.NewWorkspaceRegistry()
+		registry.Register(&model.WorkspaceEntry{
+			Workspace:   model.Workspace{ID: testWorkspaceID, Name: "Test Workspace"},
+			CaseDueDate: enabled,
+		})
+		return usecase.NewCaseUseCase(repo, registry, nil, nil, ""), repo
+	}
+	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "U-DUE-REPORTER"})
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	later := time.Date(2030, 7, 31, 0, 0, 0, 0, time.UTC)
+
+	t.Run("DueDateEnabled follows the workspace option", func(t *testing.T) {
+		on, _ := newUC(t, true)
+		off, _ := newUC(t, false)
+		gt.Bool(t, on.DueDateEnabled(ctx, testWorkspaceID)).True()
+		gt.Bool(t, off.DueDateEnabled(ctx, testWorkspaceID)).False()
+		gt.Bool(t, on.DueDateEnabled(ctx, "unknown-workspace")).False()
+		gt.Bool(t, usecase.NewCaseUseCase(memory.New(), nil, nil, nil, "").DueDateEnabled(ctx, testWorkspaceID)).False()
+	})
+
+	t.Run("CreateCase stores the due date when enabled", func(t *testing.T) {
+		uc, repo := newUC(t, true)
+		created, err := uc.CreateCase(ctx, testWorkspaceID, "Sample case 1", "", nil, nil, false, false, "", "",
+			usecase.WithCaseDueDate(&due))
+		gt.NoError(t, err).Required()
+		gt.Value(t, created.DueDate).NotNil().Required()
+		gt.Bool(t, created.DueDate.Equal(due)).True()
+
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(due)).True()
+	})
+
+	t.Run("CreateCase without the option leaves the due date unset", func(t *testing.T) {
+		uc, repo := newUC(t, true)
+		created, err := uc.CreateCase(ctx, testWorkspaceID, "Sample case 2", "", nil, nil, false, false, "", "",
+			usecase.WithCaseDueDate(nil))
+		gt.NoError(t, err).Required()
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).Nil()
+	})
+
+	t.Run("CreateCase rejects a due date when disabled and writes nothing", func(t *testing.T) {
+		uc, repo := newUC(t, false)
+		_, err := uc.CreateCase(ctx, testWorkspaceID, "Sample case 3", "", nil, nil, false, false, "", "",
+			usecase.WithCaseDueDate(&due))
+		gt.Error(t, err).Is(usecase.ErrCaseDueDateDisabled)
+		cases, err := repo.Case().List(ctx, testWorkspaceID)
+		gt.NoError(t, err).Required()
+		gt.Array(t, cases).Length(0)
+	})
+
+	t.Run("CreateDraft stores the due date when enabled and rejects it when disabled", func(t *testing.T) {
+		uc, repo := newUC(t, true)
+		draft, err := uc.CreateDraft(ctx, testWorkspaceID, "Sample draft", "", nil, nil, false, false,
+			usecase.WithCaseDueDate(&due))
+		gt.NoError(t, err).Required()
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, draft.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(due)).True()
+
+		offUC, offRepo := newUC(t, false)
+		_, err = offUC.CreateDraft(ctx, testWorkspaceID, "Sample draft", "", nil, nil, false, false,
+			usecase.WithCaseDueDate(&due))
+		gt.Error(t, err).Is(usecase.ErrCaseDueDateDisabled)
+		drafts, err := offRepo.Case().ListDrafts(ctx, testWorkspaceID)
+		gt.NoError(t, err).Required()
+		gt.Array(t, drafts).Length(0)
+	})
+
+	t.Run("UpdateCase sets, changes, preserves and clears the due date", func(t *testing.T) {
+		uc, repo := newUC(t, true)
+		created, err := uc.CreateCase(ctx, testWorkspaceID, "Sample case 4", "", nil, nil, false, false, "", "")
+		gt.NoError(t, err).Required()
+
+		_, err = uc.UpdateCase(ctx, testWorkspaceID, created.ID, usecase.CaseUpdate{DueDate: &due})
+		gt.NoError(t, err).Required()
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(due)).True()
+
+		_, err = uc.UpdateCase(ctx, testWorkspaceID, created.ID, usecase.CaseUpdate{DueDate: &later})
+		gt.NoError(t, err).Required()
+		stored, err = repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Bool(t, stored.DueDate.Equal(later)).True()
+
+		// A patch that touches only the title keeps the due date.
+		title := "Sample case 4 renamed"
+		_, err = uc.UpdateCase(ctx, testWorkspaceID, created.ID, usecase.CaseUpdate{Title: &title})
+		gt.NoError(t, err).Required()
+		stored, err = repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.Title).Equal(title)
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(later)).True()
+
+		// ClearDueDate wins over a DueDate sent alongside it.
+		_, err = uc.UpdateCase(ctx, testWorkspaceID, created.ID, usecase.CaseUpdate{DueDate: &due, ClearDueDate: true})
+		gt.NoError(t, err).Required()
+		stored, err = repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).Nil()
+	})
+
+	t.Run("UpdateCase rejects setting a due date when disabled but still allows clearing one", func(t *testing.T) {
+		uc, repo := newUC(t, false)
+		created, err := uc.CreateCase(ctx, testWorkspaceID, "Sample case 5", "", nil, nil, false, false, "", "")
+		gt.NoError(t, err).Required()
+
+		title := "should not be written"
+		_, err = uc.UpdateCase(ctx, testWorkspaceID, created.ID, usecase.CaseUpdate{Title: &title, DueDate: &due})
+		gt.Error(t, err).Is(usecase.ErrCaseDueDateDisabled)
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.Title).Equal("Sample case 5")
+		gt.Value(t, stored.DueDate).Nil()
+
+		// A due date left over from when the option was on can still be removed.
+		stored.DueDate = &due
+		_, err = repo.Case().Update(ctx, testWorkspaceID, stored)
+		gt.NoError(t, err).Required()
+		_, err = uc.UpdateCase(ctx, testWorkspaceID, created.ID, usecase.CaseUpdate{ClearDueDate: true})
+		gt.NoError(t, err).Required()
+		stored, err = repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).Nil()
+	})
+
+	t.Run("enabling the option later lets an existing case gain a due date", func(t *testing.T) {
+		repo := memory.New()
+		before := model.NewWorkspaceRegistry()
+		before.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: testWorkspaceID}})
+		created, err := usecase.NewCaseUseCase(repo, before, nil, nil, "").
+			CreateCase(ctx, testWorkspaceID, "Sample case 6", "", nil, nil, false, false, "", "")
+		gt.NoError(t, err).Required()
+		gt.Value(t, created.DueDate).Nil()
+
+		after := model.NewWorkspaceRegistry()
+		after.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: testWorkspaceID}, CaseDueDate: true})
+		_, err = usecase.NewCaseUseCase(repo, after, nil, nil, "").
+			UpdateCase(ctx, testWorkspaceID, created.ID, usecase.CaseUpdate{DueDate: &due})
+		gt.NoError(t, err).Required()
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(due)).True()
+	})
+
+	t.Run("SubmitDraft applies the due date patch and rejects it when disabled", func(t *testing.T) {
+		uc, repo := newUC(t, true)
+		draft, err := uc.CreateDraft(ctx, testWorkspaceID, "Sample draft", "", nil, nil, false, false)
+		gt.NoError(t, err).Required()
+		submitted, err := uc.SubmitDraft(ctx, testWorkspaceID, draft.ID, &usecase.CaseUpdate{DueDate: &due})
+		gt.NoError(t, err).Required()
+		gt.Value(t, submitted.Status).Equal(types.CaseStatusOpen)
+		stored, err := repo.Case().Get(ctx, testWorkspaceID, draft.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(due)).True()
+
+		offUC, offRepo := newUC(t, false)
+		offDraft, err := offUC.CreateDraft(ctx, testWorkspaceID, "Sample draft", "", nil, nil, false, false)
+		gt.NoError(t, err).Required()
+		_, err = offUC.SubmitDraft(ctx, testWorkspaceID, offDraft.ID, &usecase.CaseUpdate{DueDate: &due})
+		gt.Error(t, err).Is(usecase.ErrCaseDueDateDisabled)
+		stored, err = offRepo.Case().Get(ctx, testWorkspaceID, offDraft.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.Status).Equal(types.CaseStatusDraft)
+		gt.Value(t, stored.DueDate).Nil()
+	})
+
+	t.Run("thread mode stores the due date and rejects it before posting when disabled", func(t *testing.T) {
+		repo := memory.New()
+		registry := model.NewWorkspaceRegistry()
+		ws := threadModeWorkspace(t)
+		ws.CaseDueDate = true
+		registry.Register(ws)
+		slackMock := &mockSlackService{}
+		uc := usecase.NewCaseUseCase(repo, registry, slackMock, nil, "https://app.example.test")
+		created, err := uc.CreateCase(ctx, "support", "Sample case 7", "", nil, nil, false, false, "", "",
+			usecase.WithCaseDueDate(&due))
+		gt.NoError(t, err).Required()
+		stored, err := repo.Case().Get(ctx, "support", created.ID)
+		gt.NoError(t, err).Required()
+		gt.Value(t, stored.DueDate).NotNil().Required()
+		gt.Bool(t, stored.DueDate.Equal(due)).True()
+
+		offRepo := memory.New()
+		offRegistry := model.NewWorkspaceRegistry()
+		offRegistry.Register(threadModeWorkspace(t))
+		offSlack := &mockSlackService{}
+		offUC := usecase.NewCaseUseCase(offRepo, offRegistry, offSlack, nil, "https://app.example.test")
+		_, err = offUC.CreateCase(ctx, "support", "Sample case 8", "", nil, nil, false, false, "", "",
+			usecase.WithCaseDueDate(&due))
+		gt.Error(t, err).Is(usecase.ErrCaseDueDateDisabled)
+		gt.Array(t, offSlack.postedChannelIDs).Length(0)
+		cases, err := offRepo.Case().List(ctx, "support")
+		gt.NoError(t, err).Required()
+		gt.Array(t, cases).Length(0)
+	})
+}

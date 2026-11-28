@@ -1724,6 +1724,81 @@ type = "text"
 		gt.Bool(t, entry.ActionsEnabled()).True()
 	})
 
+	t.Run("[case] due_date defaults to off", func(t *testing.T) {
+		configs, err := writeAndLoad(t, `
+[workspace]
+id = "risk"
+
+[[fields]]
+id = "a"
+name = "A"
+type = "text"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseDueDate).Equal(false)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.DueDateEnabled()).False()
+	})
+
+	t.Run("channel mode enables the due date with [case] due_date", func(t *testing.T) {
+		configs, err := writeAndLoad(t, `
+[workspace]
+id = "risk"
+
+[case]
+due_date = true
+
+[[fields]]
+id = "a"
+name = "A"
+type = "text"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseDueDate).Equal(true)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("risk")
+		gt.NoError(t, err).Required()
+		gt.Value(t, entry.CaseDueDate).Equal(true)
+		gt.Bool(t, entry.DueDateEnabled()).True()
+	})
+
+	t.Run("thread mode enables the due date with [case] due_date", func(t *testing.T) {
+		configs, err := writeAndLoad(t, `
+[workspace]
+id = "support"
+
+[slack]
+mode = "thread"
+channel = "C0123ABC"
+
+[case]
+initial = "TRIAGE"
+closed = ["DONE"]
+due_date = true
+
+  [[case.status]]
+  id = "TRIAGE"
+  name = "Triage"
+
+  [[case.status]]
+  id = "DONE"
+  name = "Done"
+
+[[fields]]
+id = "a"
+name = "A"
+type = "text"
+`)
+		gt.NoError(t, err).Required()
+		gt.Array(t, configs).Length(1).Required()
+		gt.Value(t, configs[0].CaseDueDate).Equal(true)
+		entry, err := config.BuildWorkspaceRegistry(configs).Get("support")
+		gt.NoError(t, err).Required()
+		gt.Bool(t, entry.DueDateEnabled()).True()
+	})
+
 	t.Run("thread mode selects mention trigger", func(t *testing.T) {
 		configs, err := writeAndLoad(t, `
 [workspace]

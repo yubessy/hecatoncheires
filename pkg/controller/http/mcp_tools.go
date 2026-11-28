@@ -114,8 +114,10 @@ type caseSummary struct {
 	BoardStatus string   `json:"board_status,omitempty"`
 	ReporterID  string   `json:"reporter_id,omitempty"`
 	AssigneeIDs []string `json:"assignee_ids"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	// DueDate is the built-in due date (RFC3339), omitted when unset.
+	DueDate   string `json:"due_date,omitempty"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type fieldValue struct {
@@ -152,7 +154,7 @@ func toCaseSummary(c *model.Case) caseSummary {
 	if assignees == nil {
 		assignees = []string{}
 	}
-	return caseSummary{
+	s := caseSummary{
 		ID:          c.ID,
 		Title:       c.Title,
 		Status:      string(c.Status),
@@ -162,6 +164,10 @@ func toCaseSummary(c *model.Case) caseSummary {
 		CreatedAt:   c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:   c.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+	if c.DueDate != nil {
+		s.DueDate = c.DueDate.UTC().Format(time.RFC3339)
+	}
+	return s
 }
 
 func toCaseDetail(c *model.Case) caseDetail {

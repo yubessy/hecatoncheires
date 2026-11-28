@@ -85,6 +85,7 @@ const MUTATION_PATHS = [
   // archiveCase / unarchiveCase refresh the detail page's badge and menu from
   // their own response. There is deliberately no derived `archived` boolean.
   'archivedAt',
+  'dueDate',
   'isPrivate',
   'isTest',
   'accessDenied',

@@ -468,3 +468,25 @@ func TestBuildSystemPrompt_MentionMode_BlankWorkspaceInstructions(t *testing.T) 
 	gt.Bool(t, strings.Contains(prompt, "# Workspace\n")).False()
 	gt.Bool(t, strings.Contains(prompt, "# Workspace-specific instructions")).False()
 }
+
+func TestBuildSystemPrompt_RendersDueDate(t *testing.T) {
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+
+	enabled := newThreadWorkspace()
+	enabled.CaseDueDate = true
+	withDue := newThreadCase()
+	withDue.DueDate = &due
+	gt.String(t, threadcase.BuildSystemPromptForTest(withDue, enabled, threadcase.ModeMention, "")).
+		Contains("- Due date (YYYY-MM-DD): 2030-06-30\n")
+	gt.String(t, threadcase.BuildSystemPromptForTest(newThreadCase(), enabled, threadcase.ModeMention, "")).
+		Contains("- Due date (YYYY-MM-DD): (empty)\n")
+
+	// A workspace without [case] due_date shows no line for a case without one,
+	// but still shows a due date the case kept from when the option was on.
+	disabled := newThreadWorkspace()
+	gt.Bool(t, strings.Contains(
+		threadcase.BuildSystemPromptForTest(newThreadCase(), disabled, threadcase.ModeMention, ""),
+		"Due date")).False()
+	gt.String(t, threadcase.BuildSystemPromptForTest(withDue, disabled, threadcase.ModeMention, "")).
+		Contains("- Due date (YYYY-MM-DD): 2030-06-30\n")
+}

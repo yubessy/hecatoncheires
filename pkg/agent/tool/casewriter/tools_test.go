@@ -3,6 +3,7 @@ package casewriter_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/gollem-dev/gollem"
 	"github.com/m-mizutani/goerr/v2"
@@ -454,4 +455,72 @@ func TestNew_ThreadModeExposesTheFullWriterSet(t *testing.T) {
 	gt.Value(t, toolByName(t, tools, "case__unassign")).NotNil()
 	gt.Value(t, toolByName(t, tools, "case__update_case_status")).NotNil()
 	gt.Value(t, toolByName(t, tools, "case__close_case")).Nil()
+}
+
+func TestUpdateCase_DueDate(t *testing.T) {
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	newTool := func(enabled bool, resp *model.Case) (*mockCaseUC, gollem.Tool) {
+		m := &mockCaseUC{resp: resp}
+		tools := casewriter.New(casewriter.Deps{CaseUC: m, WorkspaceID: "ws", CaseID: 7, DueDateEnabled: enabled})
+		return m, toolByName(t, tools, "case__update_case")
+	}
+
+	t.Run("the parameter is offered only when enabled", func(t *testing.T) {
+		_, on := newTool(true, &model.Case{ID: 7})
+		_, off := newTool(false, &model.Case{ID: 7})
+		gt.Value(t, on.Spec().Parameters["due_date"]).NotNil()
+		gt.Value(t, off.Spec().Parameters["due_date"]).Nil()
+	})
+
+	t.Run("a calendar day is stored as midnight UTC and echoed back", func(t *testing.T) {
+		m, tl := newTool(true, &model.Case{ID: 7, Title: "Sample case 1", DueDate: &due})
+		out, err := tl.Run(context.Background(), map[string]any{"due_date": "2030-06-30"})
+		gt.NoError(t, err).Required()
+		gt.Array(t, m.calls).Length(1).Required()
+		gt.Value(t, m.calls[0].DueDate).NotNil().Required()
+		gt.Bool(t, m.calls[0].DueDate.Equal(due)).True()
+		gt.Bool(t, m.calls[0].ClearDueDate).False()
+		gt.Value(t, m.calls[0].Title).Nil()
+		gt.Value(t, out["due_date"]).Equal(any("2030-06-30"))
+	})
+
+	t.Run("an RFC3339 timestamp is accepted", func(t *testing.T) {
+		m, tl := newTool(true, &model.Case{ID: 7, DueDate: &due})
+		_, err := tl.Run(context.Background(), map[string]any{"due_date": "2030-06-30T00:00:00Z"})
+		gt.NoError(t, err).Required()
+		gt.Array(t, m.calls).Length(1).Required()
+		gt.Bool(t, m.calls[0].DueDate.Equal(due)).True()
+	})
+
+	t.Run("an empty string clears the due date", func(t *testing.T) {
+		m, tl := newTool(true, &model.Case{ID: 7})
+		out, err := tl.Run(context.Background(), map[string]any{"due_date": ""})
+		gt.NoError(t, err).Required()
+		gt.Array(t, m.calls).Length(1).Required()
+		gt.Bool(t, m.calls[0].ClearDueDate).True()
+		gt.Value(t, m.calls[0].DueDate).Nil()
+		gt.Value(t, out["due_date"]).Equal(any(""))
+	})
+
+	t.Run("a malformed date is rejected before the usecase is called", func(t *testing.T) {
+		m, tl := newTool(true, &model.Case{ID: 7})
+		_, err := tl.Run(context.Background(), map[string]any{"due_date": "next friday"})
+		gt.Value(t, err).NotNil()
+		gt.Array(t, m.calls).Length(0)
+	})
+
+	t.Run("a disabled workspace rejects the argument without calling the usecase", func(t *testing.T) {
+		m, tl := newTool(false, &model.Case{ID: 7})
+		_, err := tl.Run(context.Background(), map[string]any{"due_date": "2030-06-30"})
+		gt.Value(t, err).NotNil()
+		gt.Array(t, m.calls).Length(0)
+	})
+
+	t.Run("a disabled workspace's result carries no due_date key for a case without one", func(t *testing.T) {
+		_, tl := newTool(false, &model.Case{ID: 7, Title: "Sample case 2"})
+		out, err := tl.Run(context.Background(), map[string]any{"title": "Sample case 2"})
+		gt.NoError(t, err).Required()
+		_, has := out["due_date"]
+		gt.Bool(t, has).False()
+	})
 }

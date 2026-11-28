@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/m-mizutani/gt"
 	"github.com/m-mizutani/hecatoncheires/pkg/agent/tool/casemulti"
@@ -33,7 +34,7 @@ func TestCaseMultiCaseAdapter_CreateCase(t *testing.T) {
 	// does in production.
 	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "U-CREATOR"})
 
-	created, err := adapter.CreateCase(ctx, testWorkspaceID, "Cross-case title", "Cross-case description", nil, nil, true)
+	created, err := adapter.CreateCase(ctx, testWorkspaceID, "Cross-case title", "Cross-case description", nil, nil, true, nil)
 	gt.NoError(t, err).Required()
 
 	stored, err := repo.Case().Get(ctx, testWorkspaceID, created.ID)
@@ -328,4 +329,28 @@ func TestCaseMultiActionAdapter_SetActionStepDone(t *testing.T) {
 	gt.NoError(t, err).Required()
 	gt.Bool(t, reopened.IsDone()).False()
 	gt.Value(t, reopened.DoneBy).Equal("")
+}
+
+// TestCaseMultiCaseAdapter_DueDate pins that the adapter forwards the due date
+// on create and update to the real CaseUseCase.
+func TestCaseMultiCaseAdapter_DueDate(t *testing.T) {
+	repo := memory.New()
+	registry := model.NewWorkspaceRegistry()
+	registry.Register(&model.WorkspaceEntry{Workspace: model.Workspace{ID: testWorkspaceID}, CaseDueDate: true})
+	adapter := usecase.NewCaseMultiCaseAdapter(usecase.NewCaseUseCase(repo, registry, nil, nil, ""))
+	ctx := auth.ContextWithToken(context.Background(), &auth.Token{Sub: "U-CREATOR"})
+
+	due := time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC)
+	created, err := adapter.CreateCase(ctx, testWorkspaceID, "Sample case 1", "", nil, nil, false, &due)
+	gt.NoError(t, err).Required()
+	stored, err := repo.Case().Get(ctx, testWorkspaceID, created.ID)
+	gt.NoError(t, err).Required()
+	gt.Value(t, stored.DueDate).NotNil().Required()
+	gt.Bool(t, stored.DueDate.Equal(due)).True()
+
+	_, err = adapter.UpdateCase(ctx, testWorkspaceID, created.ID, casemulti.CaseUpdate{ClearDueDate: true})
+	gt.NoError(t, err).Required()
+	stored, err = repo.Case().Get(ctx, testWorkspaceID, created.ID)
+	gt.NoError(t, err).Required()
+	gt.Value(t, stored.DueDate).Nil()
 }

@@ -784,6 +784,8 @@ func buildJobTools(deps jobRuntimeDeps, adapters jobToolAdapters, c *model.Case,
 		CaseID:      caseID,
 		Schema:      fieldSchema,
 		StatusSet:   caseStatusSet,
+
+		DueDateEnabled: ws.DueDateEnabled(),
 	})...)
 	if deps.SlackService != nil && channelID != "" {
 		out = append(out, slackpost.New(slackpost.Deps{

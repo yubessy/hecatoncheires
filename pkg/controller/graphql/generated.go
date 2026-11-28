@@ -161,6 +161,7 @@ type ComplexityRoot struct {
 		ChannelUsers          func(childComplexity int, limit *int, offset *int, filter *string) int
 		CreatedAt             func(childComplexity int) int
 		Description           func(childComplexity int) int
+		DueDate               func(childComplexity int) int
 		Fields                func(childComplexity int) int
 		ID                    func(childComplexity int) int
 		IsPrivate             func(childComplexity int) int
@@ -210,6 +211,7 @@ type ComplexityRoot struct {
 	FieldConfiguration struct {
 		ActionConfig              func(childComplexity int) int
 		AllowExistingSlackChannel func(childComplexity int) int
+		CaseDueDateEnabled        func(childComplexity int) int
 		Fields                    func(childComplexity int) int
 		Labels                    func(childComplexity int) int
 	}
@@ -1358,6 +1360,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Case.Description(childComplexity), true
+	case "Case.dueDate":
+		if e.ComplexityRoot.Case.DueDate == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Case.DueDate(childComplexity), true
 	case "Case.fields":
 		if e.ComplexityRoot.Case.Fields == nil {
 			break
@@ -1572,6 +1580,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.FieldConfiguration.AllowExistingSlackChannel(childComplexity), true
+	case "FieldConfiguration.caseDueDateEnabled":
+		if e.ComplexityRoot.FieldConfiguration.CaseDueDateEnabled == nil {
+			break
+		}
+
+		return e.ComplexityRoot.FieldConfiguration.CaseDueDateEnabled(childComplexity), true
 	case "FieldConfiguration.fields":
 		if e.ComplexityRoot.FieldConfiguration.Fields == nil {
 			break
@@ -4132,6 +4146,9 @@ type FieldConfiguration {
   # existingSlackChannelID in this workspace: [slack] allow_existing_channel is
   # set, the workspace is in channel mode, and Slack is configured.
   allowExistingSlackChannel: Boolean!
+  # caseDueDateEnabled reports whether the workspace's cases carry the built-in
+  # due date ([case] due_date). Default false; valid in both case modes.
+  caseDueDateEnabled: Boolean!
 }
 
 # SlackChannelCandidate is a Slack channel the acting user may link a new case
@@ -4299,6 +4316,10 @@ type Case {
   # An archived case is hidden from the default ` + "`" + `cases` + "`" + ` listing and the Case
   # board, and is reached through the ARCHIVED archive filter.
   archivedAt: Time
+  # dueDate is the built-in due date, null when unset. Offered only when the
+  # workspace enables it (fieldConfiguration.caseDueDateEnabled); a case may
+  # still carry one stored while the option was on.
+  dueDate: Time
   fields: [FieldValue!]!       # Resolved from case_field_values via DataLoader
   # actions exposes the case's actions. The ` + "`" + `filter` + "`" + ` argument selects which
   # archive slice to return (ACTIVE / ARCHIVED / ALL); the default ACTIVE
@@ -4557,6 +4578,9 @@ input CreateCaseInput {
   # omitted or null (true and false are both rejected); the case's privacy
   # follows the channel.
   existingSlackChannelID: String
+  # dueDate sets the built-in due date. Rejected unless
+  # fieldConfiguration.caseDueDateEnabled is true.
+  dueDate: Time
 }
 
 # CreateDraftInput mirrors CreateCaseInput but every field is optional —
@@ -4571,6 +4595,9 @@ input CreateDraftInput {
   isPrivate: Boolean
   # isTest marks the draft as a test case. Defaults to false when omitted.
   isTest: Boolean
+  # dueDate sets the built-in due date. Rejected unless
+  # fieldConfiguration.caseDueDateEnabled is true.
+  dueDate: Time
 }
 
 input UpdateCaseInput {
@@ -4585,6 +4612,11 @@ input UpdateCaseInput {
   fields: [FieldValueInput!]
   # isTest, when provided, sets the test flag; omit to preserve the current value.
   isTest: Boolean
+  # dueDate, when provided, sets the built-in due date (rejected unless
+  # fieldConfiguration.caseDueDateEnabled is true). clearDueDate: true removes
+  # it and wins over dueDate; it is accepted even when the option is off.
+  dueDate: Time
+  clearDueDate: Boolean
 }
 
 # SubmitDraftInput carries the last-minute edits that the user wants to
@@ -4600,6 +4632,9 @@ input SubmitDraftInput {
   fields: [FieldValueInput!]
   # isTest, when provided, sets the test flag before the draft is promoted.
   isTest: Boolean
+  # dueDate / clearDueDate behave as in UpdateCaseInput.
+  dueDate: Time
+  clearDueDate: Boolean
 }
 
 input CreateActionInput {
@@ -5670,6 +5705,8 @@ func (ec *executionContext) childFields_Case(ctx context.Context, field graphql.
 		return ec.fieldContext_Case_boardStatus(ctx, field)
 	case "archivedAt":
 		return ec.fieldContext_Case_archivedAt(ctx, field)
+	case "dueDate":
+		return ec.fieldContext_Case_dueDate(ctx, field)
 	case "fields":
 		return ec.fieldContext_Case_fields(ctx, field)
 	case "actions":
@@ -5754,6 +5791,8 @@ func (ec *executionContext) childFields_FieldConfiguration(ctx context.Context, 
 		return ec.fieldContext_FieldConfiguration_actionConfig(ctx, field)
 	case "allowExistingSlackChannel":
 		return ec.fieldContext_FieldConfiguration_allowExistingSlackChannel(ctx, field)
+	case "caseDueDateEnabled":
+		return ec.fieldContext_FieldConfiguration_caseDueDateEnabled(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type FieldConfiguration", field.Name)
 }
@@ -11076,6 +11115,29 @@ func (ec *executionContext) fieldContext_Case_archivedAt(_ context.Context, fiel
 	return graphql.NewScalarFieldContext("Case", field, false, false, errors.New("field of type Time does not have child fields"))
 }
 
+func (ec *executionContext) _Case_dueDate(ctx context.Context, field graphql.CollectedField, obj *graphql1.Case) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Case_dueDate(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DueDate, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *time.Time) graphql.Marshaler {
+			return ec.marshalOTime2ᚖtimeᚐTime(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Case_dueDate(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("Case", field, false, false, errors.New("field of type Time does not have child fields"))
+}
+
 func (ec *executionContext) _Case_fields(ctx context.Context, field graphql.CollectedField, obj *graphql1.Case) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -11799,6 +11861,29 @@ func (ec *executionContext) _FieldConfiguration_allowExistingSlackChannel(ctx co
 	)
 }
 func (ec *executionContext) fieldContext_FieldConfiguration_allowExistingSlackChannel(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("FieldConfiguration", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _FieldConfiguration_caseDueDateEnabled(ctx context.Context, field graphql.CollectedField, obj *graphql1.FieldConfiguration) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_FieldConfiguration_caseDueDateEnabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CaseDueDateEnabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_FieldConfiguration_caseDueDateEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("FieldConfiguration", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
@@ -22325,7 +22410,7 @@ func (ec *executionContext) unmarshalInputCreateCaseInput(ctx context.Context, o
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"title", "description", "assigneeIDs", "fields", "isPrivate", "isTest", "existingSlackChannelID"}
+	fieldsInOrder := [...]string{"title", "description", "assigneeIDs", "fields", "isPrivate", "isTest", "existingSlackChannelID", "dueDate"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -22381,6 +22466,13 @@ func (ec *executionContext) unmarshalInputCreateCaseInput(ctx context.Context, o
 				return it, err
 			}
 			it.ExistingSlackChannelID = data
+		case "dueDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dueDate"))
+			data, err := ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DueDate = data
 		}
 	}
 	return it, nil
@@ -22397,7 +22489,7 @@ func (ec *executionContext) unmarshalInputCreateDraftInput(ctx context.Context, 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"title", "description", "assigneeIDs", "fields", "isPrivate", "isTest"}
+	fieldsInOrder := [...]string{"title", "description", "assigneeIDs", "fields", "isPrivate", "isTest", "dueDate"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -22446,6 +22538,13 @@ func (ec *executionContext) unmarshalInputCreateDraftInput(ctx context.Context, 
 				return it, err
 			}
 			it.IsTest = data
+		case "dueDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dueDate"))
+			data, err := ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DueDate = data
 		}
 	}
 	return it, nil
@@ -22967,7 +23066,7 @@ func (ec *executionContext) unmarshalInputSubmitDraftInput(ctx context.Context, 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"title", "description", "fields", "isTest"}
+	fieldsInOrder := [...]string{"title", "description", "fields", "isTest", "dueDate", "clearDueDate"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -23002,6 +23101,20 @@ func (ec *executionContext) unmarshalInputSubmitDraftInput(ctx context.Context, 
 				return it, err
 			}
 			it.IsTest = data
+		case "dueDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dueDate"))
+			data, err := ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DueDate = data
+		case "clearDueDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clearDueDate"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClearDueDate = data
 		}
 	}
 	return it, nil
@@ -23199,7 +23312,7 @@ func (ec *executionContext) unmarshalInputUpdateCaseInput(ctx context.Context, o
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"id", "title", "description", "fields", "isTest"}
+	fieldsInOrder := [...]string{"id", "title", "description", "fields", "isTest", "dueDate", "clearDueDate"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -23241,6 +23354,20 @@ func (ec *executionContext) unmarshalInputUpdateCaseInput(ctx context.Context, o
 				return it, err
 			}
 			it.IsTest = data
+		case "dueDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("dueDate"))
+			data, err := ec.unmarshalOTime2ᚖtimeᚐTime(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DueDate = data
+		case "clearDueDate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clearDueDate"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClearDueDate = data
 		}
 	}
 	return it, nil
@@ -25061,6 +25188,11 @@ func (ec *executionContext) _Case(ctx context.Context, sel ast.SelectionSet, obj
 			if out.Values[i] == graphql.RequiredNull {
 				atomic.AddUint32(&out.Invalids, 1)
 			}
+		case "dueDate":
+			out.Values[i] = ec._Case_dueDate(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "fields":
 			field := field
 
@@ -25490,6 +25622,11 @@ func (ec *executionContext) _FieldConfiguration(ctx context.Context, sel ast.Sel
 			}
 		case "allowExistingSlackChannel":
 			out.Values[i] = ec._FieldConfiguration_allowExistingSlackChannel(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "caseDueDateEnabled":
+			out.Values[i] = ec._FieldConfiguration_caseDueDateEnabled(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}

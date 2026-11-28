@@ -200,6 +200,7 @@ const (
 	MsgFieldActionAssignee
 	MsgFieldActionStatusLabel
 	MsgFieldActionDueDate
+	MsgFieldCaseDueDate
 
 	// Errors related to commands
 	MsgErrUnknownSubcommand // "Unknown subcommand: %s. Available: update, action."
